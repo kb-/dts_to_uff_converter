@@ -407,8 +407,12 @@ fn read_dts_xml(path: &Path) -> Result<String> {
 fn sanitize_duplicate_xml_headers(xml: &mut String) {
     if let Some(first_idx) = xml.find("<?xml") {
         if let Some(second_rel) = xml[first_idx + 5..].find("<?xml") {
-            let cutoff = first_idx + 5 + second_rel;
-            xml.truncate(cutoff);
+            let second_idx = first_idx + 5 + second_rel;
+            let removal_end = xml[second_idx..]
+                .find("?>")
+                .map(|end_rel| second_idx + end_rel + 2)
+                .unwrap_or_else(|| xml.len());
+            xml.replace_range(second_idx..removal_end, "");
         }
     }
 }
