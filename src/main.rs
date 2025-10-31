@@ -31,8 +31,9 @@ fn main() -> Result<()> {
     let track_names_str = fs::read_to_string(&args.tracks)?;
     let track_names: Vec<String> = track_names_str
         .split(|c| c == ',' || c == '\n' || c == '\r')
+        .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .map(|s| s.trim().to_string())
+        .map(|s| s.to_string())
         .collect();
 
     println!("Found {} track names.", track_names.len());
@@ -60,6 +61,7 @@ fn main() -> Result<()> {
     );
 
     // 4. Loop through each channel, read its data, and append to the UFF file.
+    let mut append_request = args.output.exists();
     for i in 0..num_channels {
         let track_name = track_names.get(i).cloned().unwrap_or_else(|| format!("Channel_{}", i + 1));
         bar.set_message(track_name.clone());
@@ -67,11 +69,9 @@ fn main() -> Result<()> {
         // Read data for one track only
         let channel_data = dts_reader.read_track(i)?;
 
-        // Determine if this is the first write (replace) or subsequent (append)
-        let append = i > 0;
-
         // Write the data to the UFF file
-        uff::write_uff58_file(&args.output, &channel_data, &track_name, append)?;
+        uff::write_uff58_file(&args.output, &channel_data, &track_name, append_request)?;
+        append_request = true;
 
         bar.inc(1);
     }

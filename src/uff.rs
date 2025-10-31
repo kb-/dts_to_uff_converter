@@ -1,13 +1,7 @@
-
-### `src/uff.rs`
-
-This file is updated to accept a track name and an `append` flag. It now correctly handles creating a new file or adding datasets to an existing one.
-
-```rust src/uff.rs
 use crate::dts::ChannelData;
 use anyhow::Result;
 use byteorder::{BigEndian, WriteBytesExt};
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
@@ -18,14 +12,17 @@ pub fn write_uff58_file<P: AsRef<Path>>(
     path: P,
     data: &ChannelData,
     track_name: &str,
-    append: bool,
+    append_request: bool,
 ) -> Result<()> {
+    let path_ref = path.as_ref();
+    let append = append_request || path_ref.exists();
+
     let file = OpenOptions::new()
         .write(true)
         .create(true)
         .append(append)
         .truncate(!append)
-        .open(path)?;
+        .open(path_ref)?;
 
     let mut writer = BufWriter::new(file);
 
@@ -40,7 +37,7 @@ pub fn write_uff58_file<P: AsRef<Path>>(
     // Record 2: Title/Channel Name
     writer.write_all(format!("{:<80}\r\n", track_name).as_bytes())?;
 
-    // Record 3 & 4: Date and other identifiers
+    // Record 3 & 4: Date and other identifiers (not supplied)
     writer.write_all(format!("{:<80}\r\n", "").as_bytes())?;
     writer.write_all(format!("{:<80}\r\n", "").as_bytes())?;
 
