@@ -63,7 +63,10 @@ fn main() -> Result<()> {
     // 4. Loop through each channel, read its data, and append to the UFF file.
     let mut append_request = args.output.exists();
     for i in 0..num_channels {
-        let track_name = track_names.get(i).cloned().unwrap_or_else(|| format!("Channel_{}", i + 1));
+        let track_name = track_names
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| format!("Channel_{}", i + 1));
         bar.set_message(track_name.clone());
 
         // Read data for one track only
