@@ -11,23 +11,66 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     text.chars().take(width).collect()
 }
 
-fn write_line<W: IoWrite>(writer: &mut W, buffer: &mut String) -> Result<()> {
-    let original_len = buffer.len();
-    if original_len < 80 {
-        let pad_len = 80 - original_len;
-        buffer.reserve(pad_len);
-        for _ in 0..pad_len {
-            buffer.push(' ');
+struct LineBuffer {
+    text: String,
+}
+
+impl LineBuffer {
+    fn with_capacity(capacity: usize) -> Self {
+        let mut text = String::with_capacity(capacity.max(80));
+        if text.capacity() < 80 {
+            text.reserve(80 - text.capacity());
+        }
+        Self { text }
+    }
+
+    fn clear(&mut self) {
+        self.text.clear();
+    }
+
+    fn push_str(&mut self, s: &str) {
+        self.text.push_str(s);
+    }
+
+    fn push_char(&mut self, ch: char) {
+        self.text.push(ch);
+    }
+
+    fn write_fmt(&mut self, args: fmt::Arguments<'_>) {
+        FmtWrite::write_fmt(self, args).expect("writing formatted text into line buffer");
+    }
+
+    fn ensure_minimum_capacity(&mut self, capacity: usize) {
+        if self.text.capacity() < capacity {
+            self.text.reserve(capacity - self.text.capacity());
         }
     }
 
-    writer.write_all(buffer.as_bytes())?;
-    writer.write_all(b"\n")?;
+    fn write_line<W: IoWrite>(&mut self, writer: &mut W) -> Result<()> {
+        let original_len = self.text.len();
+        if original_len < 80 {
+            let pad_len = 80 - original_len;
+            self.text.extend(std::iter::repeat(' ').take(pad_len));
+        }
 
-    if buffer.len() > original_len {
-        buffer.truncate(original_len);
+        writer.write_all(self.text.as_bytes())?;
+        writer.write_all(b"\n")?;
+
+        self.text.truncate(original_len);
+        Ok(())
     }
-    Ok(())
+}
+
+impl fmt::Write for LineBuffer {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.text.push_str(s);
+        Ok(())
+    }
+
+    fn write_char(&mut self, c: char) -> fmt::Result {
+        self.text.push(c);
+        Ok(())
+    }
 }
 
 struct ScientificComponents {
@@ -137,11 +180,9 @@ fn write_scientific<W: FmtWrite>(
     buffer.write_str(digits_str)
 }
 
-fn format_data_line(buffer: &mut String, values: &[f64]) {
+fn format_data_line(buffer: &mut LineBuffer, values: &[f64]) {
     buffer.clear();
-    if buffer.capacity() < 80 {
-        buffer.reserve(80 - buffer.capacity());
-    }
+    buffer.ensure_minimum_capacity(80);
 
     for &value in values {
         write_scientific(buffer, value, 20, 11).expect("writing scientific value to buffer");
@@ -167,81 +208,74 @@ pub fn write_uff58_file<P: AsRef<Path>>(
 
     let mut writer = BufWriter::new(file);
 
-    let mut line_buffer = String::new();
+    let mut line_buffer = LineBuffer::with_capacity(256);
 
     // --- Block 1: UFF Type 58 Header (ASCII layout) ---
     line_buffer.clear();
     line_buffer.push_str(UFF_SEPARATOR);
-    write_line(&mut writer, &mut line_buffer)?;
+    line_buffer.write_line(&mut writer)?;
 
     line_buffer.clear();
     line_buffer.push_str("    58");
-    write_line(&mut writer, &mut line_buffer)?;
+    line_buffer.write_line(&mut writer)?;
 
     line_buffer.clear();
-    write_line(&mut writer, &mut line_buffer)?;
+    line_buffer.write_line(&mut writer)?;
 
     let pt_label = truncate_to_width(track_name, 64);
     line_buffer.clear();
     line_buffer.push_str("Pt=");
     line_buffer.push_str(&pt_label);
-    line_buffer.push(';');
-    write_line(&mut writer, &mut line_buffer)?;
+    line_buffer.push_char(';');
+    line_buffer.write_line(&mut writer)?;
 
     line_buffer.clear();
-    write_line(&mut writer, &mut line_buffer)?;
-
-    line_buffer.clear();
-    line_buffer.push_str("NONE");
-    write_line(&mut writer, &mut line_buffer)?;
+    line_buffer.write_line(&mut writer)?;
 
     line_buffer.clear();
     line_buffer.push_str("NONE");
-    write_line(&mut writer, &mut line_buffer)?;
+    line_buffer.write_line(&mut writer)?;
+
+    line_buffer.clear();
+    line_buffer.push_str("NONE");
+    line_buffer.write_line(&mut writer)?;
 
     let channel_label = truncate_to_width(track_name, 19);
     let channel_field = format!("{:<19}", channel_label);
     line_buffer.clear();
-    FmtWrite::write_fmt(
-        &mut line_buffer,
-        format_args!(
-            "    1         0    0         0 {}{}{}{}{}",
-            channel_field,
-            0,
-            format!("{:>4}", 0),
-            format!(" {:<19}", "NONE"),
-            format!("{:<4}{}", 1, 0)
-        ),
-    )
-    .unwrap();
-    write_line(&mut writer, &mut line_buffer)?;
+    line_buffer.write_fmt(format_args!(
+        "    1         0    0         0 {}{}{}{}{}",
+        channel_field,
+        0,
+        format!("{:>4}", 0),
+        format!(" {:<19}", "NONE"),
+        format!("{:<4}{}", 1, 0)
+    ));
+    line_buffer.write_line(&mut writer)?;
 
     line_buffer.clear();
-    FmtWrite::write_fmt(
-        &mut line_buffer,
-        format_args!("{:>10}{:>10}{:>10}  ", 4, data.time_series.len(), 1),
-    )
-    .unwrap();
+    line_buffer.write_fmt(format_args!(
+        "{:>10}{:>10}{:>10}  ",
+        4,
+        data.time_series.len(),
+        1
+    ));
     write_scientific(&mut line_buffer, 0.0, 11, 5).expect("writing record2 start time");
     line_buffer.push_str("  ");
     write_scientific(&mut line_buffer, 1.0 / data.sample_rate, 11, 5)
         .expect("writing record2 time step");
     line_buffer.push_str("  ");
     write_scientific(&mut line_buffer, 0.0, 11, 5).expect("writing record2 abscissa start");
-    write_line(&mut writer, &mut line_buffer)?;
+    line_buffer.write_line(&mut writer)?;
 
     let abscissa_name = format!(" {:<19}", "Time");
     let abscissa_units = format!("{: <48}", format!("  {}", truncate_to_width("s", 46)));
     line_buffer.clear();
-    FmtWrite::write_fmt(
-        &mut line_buffer,
-        format_args!(
-            "{:>10}{:>5}{:>5}{:>5}{}{}",
-            17, 0, 0, 0, abscissa_name, abscissa_units
-        ),
-    )
-    .unwrap();
-    write_line(&mut writer, &mut line_buffer)?;
+    line_buffer.write_fmt(format_args!(
+        "{:>10}{:>5}{:>5}{:>5}{}{}",
+        17, 0, 0, 0, abscissa_name, abscissa_units
+    ));
+    line_buffer.write_line(&mut writer)?;
 
     let ordinate_name_field = format!(" {:<19}", channel_label);
     let ordinate_units_field = format!(
@@ -249,40 +283,32 @@ pub fn write_uff58_file<P: AsRef<Path>>(
         format!("  {}", truncate_to_width(&data.units, 33))
     );
     line_buffer.clear();
-    FmtWrite::write_fmt(
-        &mut line_buffer,
-        format_args!(
-            "{:>10}{:>5}{:>5}{:>5}{}{}",
-            8, 0, 0, 0, ordinate_name_field, ordinate_units_field
-        ),
-    )
-    .unwrap();
-    write_line(&mut writer, &mut line_buffer)?;
+    line_buffer.write_fmt(format_args!(
+        "{:>10}{:>5}{:>5}{:>5}{}{}",
+        8, 0, 0, 0, ordinate_name_field, ordinate_units_field
+    ));
+    line_buffer.write_line(&mut writer)?;
 
     let none_name_field = format!(" {:<19}", "NONE");
     let none_units_field = format!("{: <35}", format!("  {}", "NONE"));
     line_buffer.clear();
-    FmtWrite::write_fmt(
-        &mut line_buffer,
-        format_args!(
-            "{:>10}{:>5}{:>5}{:>5}{}{}",
-            0, 0, 0, 0, none_name_field, none_units_field
-        ),
-    )
-    .unwrap();
-    write_line(&mut writer, &mut line_buffer)?;
-    write_line(&mut writer, &mut line_buffer)?;
+    line_buffer.write_fmt(format_args!(
+        "{:>10}{:>5}{:>5}{:>5}{}{}",
+        0, 0, 0, 0, none_name_field, none_units_field
+    ));
+    line_buffer.write_line(&mut writer)?;
+    line_buffer.write_line(&mut writer)?;
 
     // --- ASCII Data Section ---
     for chunk in data.time_series.chunks(4) {
         format_data_line(&mut line_buffer, chunk);
-        write_line(&mut writer, &mut line_buffer)?;
+        line_buffer.write_line(&mut writer)?;
     }
 
     // --- End of Block ---
     line_buffer.clear();
     line_buffer.push_str(UFF_SEPARATOR);
-    write_line(&mut writer, &mut line_buffer)?;
+    line_buffer.write_line(&mut writer)?;
 
     writer.flush()?;
     Ok(())
