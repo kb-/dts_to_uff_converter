@@ -41,7 +41,7 @@ struct ChnHeader {
 
 /// Holds all processed data for a single channel, ready for writing.
 pub struct ChannelData {
-    pub time_series: Vec<f32>,
+    pub time_series: Vec<f64>,
     pub sample_rate: f64,
     pub units: String,
 }
@@ -201,9 +201,9 @@ impl DtsReader {
 
         let scale = scale_factor_mv / chn_header.scale_factor_eu / excitation;
 
-        let time_series: Vec<f32> = adc_data
+        let time_series: Vec<f64> = adc_data
             .into_iter()
-            .map(|adc_val| ((f64::from(adc_val) * scale) + offset) as f32)
+            .map(|adc_val| (f64::from(adc_val) * scale) + offset)
             .collect();
 
         Ok(ChannelData {

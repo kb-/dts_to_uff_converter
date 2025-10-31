@@ -1,7 +1,5 @@
-mod dts;
-mod uff;
-
 use anyhow::Result;
+use dts_to_uff_converter::{dts, uff};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
