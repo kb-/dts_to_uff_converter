@@ -1,48 +1,30 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
+use encoding_rs::{Encoding, UTF_16BE, UTF_16LE};
 use natord::compare;
-use quick_xml::de::from_str;
-use serde::Deserialize;
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::Reader;
 use std::fs::{self, File};
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-// --- Structs to deserialize the .dts XML file ---
-#[derive(Debug, Deserialize)]
-#[serde(rename = "DTS_Setup")]
-struct DtsSetup {
-    #[serde(rename = "Module", default)]
-    modules: Vec<Module>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Module {
-    #[serde(rename = "@StartRecordSampleNumber")]
-    start_record_sample_number: f64,
-    #[serde(rename = "AnalogInputChanel", default)]
-    channels: Vec<AnalogInputChannel>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct AnalogInputChannel {
-    #[serde(rename = "@ProportionalToExcitation")]
-    pub proportional_to_excitation: String,
-    #[serde(rename = "@IsInverted")]
-    pub is_inverted: String,
-    #[serde(rename = "@MeasuredExcitationVoltage")]
+    pub proportional_to_excitation: bool,
+    pub is_inverted: bool,
     pub measured_excitation_voltage: f64,
-    #[serde(rename = "@FactoryExcitationVoltage")]
     pub factory_excitation_voltage: f64,
-    #[serde(rename = "@InitialEu")]
     pub initial_eu: f64,
-    #[serde(rename = "@ZeroMethod")]
-    pub zero_method: String,
-    #[serde(rename = "@Eu")]
+    pub zero_method: ZeroMethod,
     pub eu: String,
-    #[serde(rename = "@Description")]
-    pub description: String,
-    #[serde(rename = "@AbsoluteDisplayOrder")]
     pub display_order: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ZeroMethod {
+    UsePreCalZero,
+    AverageOverTime,
+    None,
 }
 
 // --- Structs for data from .chn files ---
@@ -51,7 +33,6 @@ struct ChnHeader {
     channel_start: u64,
     npts: u64,
     sample_rate: f64,
-    trigger_sample_number: i64,
     pre_test_zero_level_adc: i32,
     data_zero_level_adc: i32,
     scale_factor_mv: f64,
@@ -60,7 +41,7 @@ struct ChnHeader {
 
 /// Holds all processed data for a single channel, ready for writing.
 pub struct ChannelData {
-    pub time_series: Vec<f32>,
+    pub time_series: Vec<f64>,
     pub sample_rate: f64,
     pub units: String,
 }
@@ -68,7 +49,6 @@ pub struct ChannelData {
 /// A reader that mimics the DTS.m class behavior.
 /// It opens all files in a test folder and parses their metadata.
 pub struct DtsReader {
-    base_path: PathBuf,
     // Metadata is stored per-channel, in the correct, sorted order.
     chn_files: Vec<PathBuf>,
     xml_metadata: Vec<(AnalogInputChannel, f64)>, // (ChannelInfo, StartRecordSampleNumber)
@@ -79,32 +59,17 @@ pub struct DtsReader {
 impl DtsReader {
     /// Creates a new DtsReader by analyzing a test folder.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let base_path = path.as_ref().to_path_buf();
+        let base_path = path.as_ref();
 
         // 1. Find and parse the .dts XML file
-        let dts_file_path = find_file_by_extension(&base_path, "dts")?;
-        let xml_string = fs::read_to_string(dts_file_path)?;
-        let parsed_xml: DtsSetup = from_str(&xml_string)
-            .map_err(|e| anyhow!("Failed to parse .dts XML file: {}", e))?;
-
-        // Flatten the XML structure into a single list of channels with their parent module's info
-        let mut all_channels: Vec<(AnalogInputChannel, f64)> = parsed_xml
-            .modules
-            .into_iter()
-            .flat_map(|module| {
-                let start_sample = module.start_record_sample_number;
-                module
-                    .channels
-                    .into_iter()
-                    .map(move |channel| (channel, start_sample))
-            })
-            .collect();
+        let dts_file_path = find_file_by_extension(base_path, "dts")?;
+        let mut all_channels = parse_dts_metadata(&dts_file_path)?;
 
         // Sort channels by their absolute display order
         all_channels.sort_by_key(|(ch, _)| ch.display_order);
 
         // 2. Find and sort all .chn files
-        let mut chn_files: Vec<PathBuf> = fs::read_dir(&base_path)?
+        let mut chn_files: Vec<PathBuf> = fs::read_dir(base_path)?
             .filter_map(|entry| {
                 entry.ok().and_then(|e| {
                     let path = e.path();
@@ -140,7 +105,6 @@ impl DtsReader {
         }
 
         Ok(DtsReader {
-            base_path,
             chn_files,
             xml_metadata: all_channels,
             chn_headers,
@@ -165,7 +129,7 @@ impl DtsReader {
         reader.seek(SeekFrom::Start(32))?;
         let sample_rate = reader.read_f64::<LittleEndian>()?;
         let num_triggers = reader.read_u16::<LittleEndian>()?;
-        let trigger_sample_number = reader.read_i64::<LittleEndian>()?;
+        let _trigger_sample_number = reader.read_i64::<LittleEndian>()?;
 
         let n = num_triggers as u64 * 8;
         reader.seek(SeekFrom::Start(n + 42))?;
@@ -179,7 +143,6 @@ impl DtsReader {
             channel_start,
             npts,
             sample_rate,
-            trigger_sample_number,
             pre_test_zero_level_adc,
             data_zero_level_adc,
             scale_factor_mv,
@@ -208,11 +171,11 @@ impl DtsReader {
 
         // --- Perform scaling and offset calculations ---
         let mut scale_factor_mv = chn_header.scale_factor_mv;
-        if xml_meta.is_inverted == "True" {
+        if xml_meta.is_inverted {
             scale_factor_mv = -scale_factor_mv;
         }
 
-        let excitation = if xml_meta.proportional_to_excitation == "False" {
+        let excitation = if !xml_meta.proportional_to_excitation {
             1.0
         } else if xml_meta.factory_excitation_voltage.is_nan() {
             xml_meta.measured_excitation_voltage
@@ -220,27 +183,27 @@ impl DtsReader {
             xml_meta.factory_excitation_voltage
         };
 
-        let offset = match xml_meta.zero_method.as_str() {
-            "UsePreCalZero" => {
+        let offset = match xml_meta.zero_method {
+            ZeroMethod::UsePreCalZero => {
                 (-f64::from(chn_header.pre_test_zero_level_adc) * scale_factor_mv
                     / chn_header.scale_factor_eu
                     / excitation)
                     + xml_meta.initial_eu
             }
-            "AverageOverTime" => {
+            ZeroMethod::AverageOverTime => {
                 (-f64::from(chn_header.data_zero_level_adc) * scale_factor_mv
                     / chn_header.scale_factor_eu
                     / excitation)
                     + xml_meta.initial_eu
             }
-            _ => xml_meta.initial_eu, // "None"
+            ZeroMethod::None => xml_meta.initial_eu,
         };
 
         let scale = scale_factor_mv / chn_header.scale_factor_eu / excitation;
 
-        let time_series: Vec<f32> = adc_data
+        let time_series: Vec<f64> = adc_data
             .into_iter()
-            .map(|adc_val| ((f64::from(adc_val) * scale) + offset) as f32)
+            .map(|adc_val| (f64::from(adc_val) * scale) + offset)
             .collect();
 
         Ok(ChannelData {
@@ -260,8 +223,200 @@ fn find_file_by_extension(dir: &Path, extension: &str) -> Result<PathBuf> {
     fs::read_dir(dir)?
         .filter_map(|entry| entry.ok())
         .find(|entry| {
-            entry.path().extension().map_or(false, |ext| ext == extension)
+            entry
+                .path()
+                .extension()
+                .map_or(false, |ext| ext == extension)
         })
         .map(|entry| entry.path())
         .ok_or_else(|| anyhow!("No '.{}' file found in directory {:?}", extension, dir))
+}
+
+fn parse_dts_metadata(path: &Path) -> Result<Vec<(AnalogInputChannel, f64)>> {
+    let mut xml = read_dts_xml(path)?;
+    sanitize_duplicate_xml_headers(&mut xml);
+
+    let mut reader = Reader::from_str(&xml);
+    reader.trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut module_stack: Vec<f64> = Vec::new();
+    let mut channels = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(ref e) => match e.name().as_ref() {
+                b"Module" => {
+                    let mut start_sample = 0.0;
+                    for attr in e.attributes().with_checks(false) {
+                        let attr = attr?;
+                        let key = attr.key.as_ref();
+                        if key == b"StartRecordSampleNumber" {
+                            let value = attr.unescape_value().with_context(|| {
+                                "Failed to decode StartRecordSampleNumber attribute"
+                            })?;
+                            start_sample = parse_f64(value.as_ref());
+                        }
+                    }
+                    module_stack.push(start_sample);
+                }
+                b"AnalogInputChanel" => {
+                    let start_sample = *module_stack.last().unwrap_or(&0.0);
+                    collect_channel(e, start_sample, &mut channels)?;
+                }
+                _ => {}
+            },
+            Event::Empty(ref e) => match e.name().as_ref() {
+                b"AnalogInputChanel" => {
+                    let start_sample = *module_stack.last().unwrap_or(&0.0);
+                    collect_channel(e, start_sample, &mut channels)?;
+                }
+                _ => {}
+            },
+            Event::End(ref e) => {
+                if e.name().as_ref() == b"Module" {
+                    module_stack.pop();
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+
+        buf.clear();
+    }
+
+    Ok(channels)
+}
+
+fn collect_channel(
+    event: &BytesStart,
+    start_sample: f64,
+    channels: &mut Vec<(AnalogInputChannel, f64)>,
+) -> Result<()> {
+    let mut proportional_to_excitation = false;
+    let mut is_inverted = false;
+    let mut measured_excitation_voltage = f64::NAN;
+    let mut factory_excitation_voltage = f64::NAN;
+    let mut initial_eu = 0.0;
+    let mut zero_method = ZeroMethod::None;
+    let mut eu = String::new();
+    let mut display_order = 0u32;
+
+    for attr in event.attributes().with_checks(false) {
+        let attr = attr?;
+        let key = attr.key.as_ref();
+        let key_str = String::from_utf8_lossy(key);
+        let value = attr
+            .unescape_value()
+            .with_context(|| format!("Failed to decode value for attribute '{}'.", key_str))?;
+
+        match key {
+            b"ProportionalToExcitation" => {
+                proportional_to_excitation = value.as_ref().eq_ignore_ascii_case("True");
+            }
+            b"IsInverted" => {
+                is_inverted = value.as_ref().eq_ignore_ascii_case("True");
+            }
+            b"MeasuredExcitationVoltage" => {
+                measured_excitation_voltage = parse_f64(value.as_ref());
+            }
+            b"FactoryExcitationVoltage" => {
+                factory_excitation_voltage = parse_f64(value.as_ref());
+            }
+            b"InitialEu" => {
+                initial_eu = parse_f64(value.as_ref());
+            }
+            b"ZeroMethod" => {
+                zero_method = match value.as_ref() {
+                    "UsePreCalZero" => ZeroMethod::UsePreCalZero,
+                    "AverageOverTime" => ZeroMethod::AverageOverTime,
+                    _ => ZeroMethod::None,
+                };
+            }
+            b"Eu" => {
+                eu = value.into_owned();
+            }
+            b"AbsoluteDisplayOrder" => {
+                display_order = value.as_ref().parse::<u32>().unwrap_or(0);
+            }
+            _ => {}
+        }
+    }
+
+    channels.push((
+        AnalogInputChannel {
+            proportional_to_excitation,
+            is_inverted,
+            measured_excitation_voltage,
+            factory_excitation_voltage,
+            initial_eu,
+            zero_method,
+            eu,
+            display_order,
+        },
+        start_sample,
+    ));
+
+    Ok(())
+}
+
+fn read_dts_xml(path: &Path) -> Result<String> {
+    let bytes = fs::read(path).with_context(|| format!("Failed to read DTS file at {:?}", path))?;
+    if bytes.is_empty() {
+        return Ok(String::new());
+    }
+
+    if let Some((encoding, bom_len)) = Encoding::for_bom(&bytes) {
+        let (decoded, had_errors) = encoding.decode_without_bom_handling(&bytes[bom_len..]);
+        if had_errors {
+            return Err(anyhow!(
+                "Failed to decode DTS XML file due to invalid characters."
+            ));
+        }
+        return Ok(decoded.into_owned());
+    }
+
+    if let Ok(text) = std::str::from_utf8(&bytes) {
+        return Ok(text.to_string());
+    }
+
+    let looks_utf16le = bytes.len() > 1 && bytes[1] == 0;
+    let looks_utf16be = bytes.len() > 1 && bytes[0] == 0;
+
+    let encoding = if looks_utf16le {
+        Some(UTF_16LE)
+    } else if looks_utf16be {
+        Some(UTF_16BE)
+    } else {
+        None
+    };
+
+    if let Some(enc) = encoding {
+        let (decoded, had_errors) = enc.decode_without_bom_handling(&bytes);
+        if !had_errors {
+            return Ok(decoded.into_owned());
+        }
+    }
+
+    Err(anyhow!(
+        "Unable to determine encoding for DTS XML file at {:?}",
+        path
+    ))
+}
+
+fn sanitize_duplicate_xml_headers(xml: &mut String) {
+    if let Some(first_idx) = xml.find("<?xml") {
+        if let Some(second_rel) = xml[first_idx + 5..].find("<?xml") {
+            let second_idx = first_idx + 5 + second_rel;
+            let removal_end = xml[second_idx..]
+                .find("?>")
+                .map(|end_rel| second_idx + end_rel + 2)
+                .unwrap_or_else(|| xml.len());
+            xml.replace_range(second_idx..removal_end, "");
+        }
+    }
+}
+
+fn parse_f64(value: &str) -> f64 {
+    value.trim().parse::<f64>().unwrap_or(f64::NAN)
 }
