@@ -1,6 +1,6 @@
 use anyhow::Result;
-use dts_to_uff_converter::{dts, uff};
 use clap::Parser;
+use dts_to_uff_converter::{dts, uff};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
 use std::path::PathBuf;

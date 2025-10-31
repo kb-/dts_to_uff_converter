@@ -1,7 +1,8 @@
 use crate::dts::ChannelData;
 use anyhow::Result;
+use std::fmt::Write as FmtWrite;
 use std::fs::OpenOptions;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Write as IoWrite};
 use std::path::Path;
 
 const UFF_SEPARATOR: &str = "    -1";
@@ -10,13 +11,22 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     text.chars().take(width).collect()
 }
 
-fn write_line<W: Write>(writer: &mut W, line: &str) -> Result<()> {
-    let mut padded = String::from(line);
-    if padded.len() < 80 {
-        padded.push_str(&" ".repeat(80 - padded.len()));
+fn write_line<W: IoWrite>(writer: &mut W, buffer: &mut String) -> Result<()> {
+    let original_len = buffer.len();
+    if original_len < 80 {
+        let pad_len = 80 - original_len;
+        buffer.reserve(pad_len);
+        for _ in 0..pad_len {
+            buffer.push(' ');
+        }
     }
-    writer.write_all(padded.as_bytes())?;
+
+    writer.write_all(buffer.as_bytes())?;
     writer.write_all(b"\n")?;
+
+    if buffer.len() > original_len {
+        buffer.truncate(original_len);
+    }
     Ok(())
 }
 
@@ -30,12 +40,11 @@ fn format_scientific(value: f64, width: usize, precision: usize) -> String {
     format!("{:>width$}", formatted, width = width)
 }
 
-fn format_data_line(values: &[f64]) -> String {
-    let mut line = String::new();
+fn format_data_line(buffer: &mut String, values: &[f64]) {
+    buffer.clear();
     for &value in values {
-        line.push_str(&format_scientific(value, 20, 11));
+        buffer.push_str(&format_scientific(value, 20, 11));
     }
-    line
 }
 
 /// Writes a single channel's data to a UFF Type 58 file using the ASCII layout emitted by MATLAB.
@@ -57,84 +66,124 @@ pub fn write_uff58_file<P: AsRef<Path>>(
 
     let mut writer = BufWriter::new(file);
 
+    let mut line_buffer = String::new();
+
     // --- Block 1: UFF Type 58 Header (ASCII layout) ---
-    write_line(&mut writer, UFF_SEPARATOR)?;
-    write_line(&mut writer, "    58")?;
-    write_line(&mut writer, "")?;
+    line_buffer.clear();
+    line_buffer.push_str(UFF_SEPARATOR);
+    write_line(&mut writer, &mut line_buffer)?;
+
+    line_buffer.clear();
+    line_buffer.push_str("    58");
+    write_line(&mut writer, &mut line_buffer)?;
+
+    line_buffer.clear();
+    write_line(&mut writer, &mut line_buffer)?;
 
     let pt_label = truncate_to_width(track_name, 64);
-    write_line(&mut writer, &format!("Pt={};", pt_label))?;
-    write_line(&mut writer, "")?;
-    write_line(&mut writer, "NONE")?;
-    write_line(&mut writer, "NONE")?;
+    line_buffer.clear();
+    line_buffer.push_str("Pt=");
+    line_buffer.push_str(&pt_label);
+    line_buffer.push(';');
+    write_line(&mut writer, &mut line_buffer)?;
+
+    line_buffer.clear();
+    write_line(&mut writer, &mut line_buffer)?;
+
+    line_buffer.clear();
+    line_buffer.push_str("NONE");
+    write_line(&mut writer, &mut line_buffer)?;
+
+    line_buffer.clear();
+    line_buffer.push_str("NONE");
+    write_line(&mut writer, &mut line_buffer)?;
 
     let channel_label = truncate_to_width(track_name, 19);
     let channel_field = format!("{:<19}", channel_label);
-    let record1 = format!(
-        "    1         0    0         0 {}{}{}{}{}",
-        channel_field,
-        0,
-        format!("{:>4}", 0),
-        format!(" {:<19}", "NONE"),
-        format!("{:<4}{}", 1, 0)
-    );
-    write_line(&mut writer, &record1)?;
+    line_buffer.clear();
+    FmtWrite::write_fmt(
+        &mut line_buffer,
+        format_args!(
+            "    1         0    0         0 {}{}{}{}{}",
+            channel_field,
+            0,
+            format!("{:>4}", 0),
+            format!(" {:<19}", "NONE"),
+            format!("{:<4}{}", 1, 0)
+        ),
+    )
+    .unwrap();
+    write_line(&mut writer, &mut line_buffer)?;
 
-    let record2 = format!(
-        "{:>10}{:>10}{:>10}  {}  {}  {}",
-        4,
-        data.time_series.len(),
-        1,
-        format_scientific(0.0, 11, 5),
-        format_scientific(1.0 / data.sample_rate, 11, 5),
-        format_scientific(0.0, 11, 5)
-    );
-    write_line(&mut writer, &record2)?;
+    line_buffer.clear();
+    FmtWrite::write_fmt(
+        &mut line_buffer,
+        format_args!(
+            "{:>10}{:>10}{:>10}  {}  {}  {}",
+            4,
+            data.time_series.len(),
+            1,
+            format_scientific(0.0, 11, 5),
+            format_scientific(1.0 / data.sample_rate, 11, 5),
+            format_scientific(0.0, 11, 5)
+        ),
+    )
+    .unwrap();
+    write_line(&mut writer, &mut line_buffer)?;
 
     let abscissa_name = format!(" {:<19}", "Time");
-    let abscissa_units = format!(
-        "{: <48}",
-        format!("  {}", truncate_to_width("s", 46))
-    );
-    let record3 = format!(
-        "{:>10}{:>5}{:>5}{:>5}{}{}",
-        17, 0, 0, 0, abscissa_name, abscissa_units
-    );
-    write_line(&mut writer, &record3)?;
+    let abscissa_units = format!("{: <48}", format!("  {}", truncate_to_width("s", 46)));
+    line_buffer.clear();
+    FmtWrite::write_fmt(
+        &mut line_buffer,
+        format_args!(
+            "{:>10}{:>5}{:>5}{:>5}{}{}",
+            17, 0, 0, 0, abscissa_name, abscissa_units
+        ),
+    )
+    .unwrap();
+    write_line(&mut writer, &mut line_buffer)?;
 
     let ordinate_name_field = format!(" {:<19}", channel_label);
     let ordinate_units_field = format!(
         "{: <35}",
-        format!(
-            "  {}",
-            truncate_to_width(&data.units, 33)
-        )
+        format!("  {}", truncate_to_width(&data.units, 33))
     );
-    let record4 = format!(
-        "{:>10}{:>5}{:>5}{:>5}{}{}",
-        8, 0, 0, 0, ordinate_name_field, ordinate_units_field
-    );
-    write_line(&mut writer, &record4)?;
+    line_buffer.clear();
+    FmtWrite::write_fmt(
+        &mut line_buffer,
+        format_args!(
+            "{:>10}{:>5}{:>5}{:>5}{}{}",
+            8, 0, 0, 0, ordinate_name_field, ordinate_units_field
+        ),
+    )
+    .unwrap();
+    write_line(&mut writer, &mut line_buffer)?;
 
     let none_name_field = format!(" {:<19}", "NONE");
     let none_units_field = format!("{: <35}", format!("  {}", "NONE"));
-    let record5 = format!(
-        "{:>10}{:>5}{:>5}{:>5}{}{}",
-        0, 0, 0, 0, none_name_field, none_units_field
-    );
-    write_line(&mut writer, &record5)?;
-
-    let record6 = record5.clone();
-    write_line(&mut writer, &record6)?;
+    line_buffer.clear();
+    FmtWrite::write_fmt(
+        &mut line_buffer,
+        format_args!(
+            "{:>10}{:>5}{:>5}{:>5}{}{}",
+            0, 0, 0, 0, none_name_field, none_units_field
+        ),
+    )
+    .unwrap();
+    write_line(&mut writer, &mut line_buffer)?;
+    write_line(&mut writer, &mut line_buffer)?;
 
     // --- ASCII Data Section ---
     for chunk in data.time_series.chunks(4) {
-        let line = format_data_line(chunk);
-        write_line(&mut writer, &line)?;
+        format_data_line(&mut line_buffer, chunk);
+        write_line(&mut writer, &mut line_buffer)?;
     }
 
     // --- End of Block ---
-    write_line(&mut writer, UFF_SEPARATOR)?;
+    line_buffer.clear();
+    line_buffer.push_str(UFF_SEPARATOR);
+    write_line(&mut writer, &mut line_buffer)?;
 
     writer.flush()?;
     Ok(())
