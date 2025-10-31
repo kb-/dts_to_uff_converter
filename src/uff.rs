@@ -300,6 +300,7 @@ pub fn write_uff58_file<P: AsRef<Path>>(
     line_buffer.write_line(&mut writer)?;
 
     // --- ASCII Data Section ---
+    let mut data_line = String::with_capacity(80);
     for chunk in data.time_series.chunks(4) {
         format_data_line(&mut line_buffer, chunk);
         line_buffer.write_line(&mut writer)?;
