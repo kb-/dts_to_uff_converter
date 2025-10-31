@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use dts_to_uff_converter::{dts, uff};
 use indicatif::{ProgressBar, ProgressStyle};
+use rayon::prelude::*;
 use std::fs;
 use std::path::PathBuf;
 
@@ -59,22 +60,38 @@ fn main() -> Result<()> {
     );
 
     // 4. Loop through each channel, read its data, and append to the UFF file.
-    let mut append_request = args.output.exists();
-    for i in 0..num_channels {
-        let track_name = track_names
-            .get(i)
-            .cloned()
-            .unwrap_or_else(|| format!("Channel_{}", i + 1));
-        bar.set_message(track_name.clone());
+    let append_request = args.output.exists();
 
-        // Read data for one track only
-        let channel_data = dts_reader.read_track(i)?;
+    let mut channel_results: Vec<_> = (0..num_channels)
+        .into_par_iter()
+        .map_init(
+            || bar.clone(),
+            |progress, i| {
+                let track_name = track_names
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Channel_{}", i + 1));
+                progress.set_message(track_name.clone());
 
-        // Write the data to the UFF file
-        uff::write_uff58_file(&args.output, &channel_data, &track_name, append_request)?;
-        append_request = true;
+                let channel_data = dts_reader.read_track(i)?;
 
-        bar.inc(1);
+                progress.inc(1);
+                Result::<_>::Ok((i, track_name, channel_data))
+            },
+        )
+        .collect::<Result<Vec<_>>>()?;
+
+    channel_results.sort_by_key(|(index, _, _)| *index);
+
+    let mut append_request_flag = append_request;
+    for (_index, track_name, channel_data) in channel_results {
+        uff::write_uff58_file(
+            &args.output,
+            &channel_data,
+            &track_name,
+            append_request_flag,
+        )?;
+        append_request_flag = true;
     }
 
     bar.finish_with_message("Conversion complete!");
