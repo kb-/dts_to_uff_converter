@@ -57,6 +57,7 @@ pub struct DtsReader {
 }
 
 impl DtsReader {
+    const READ_BUFFER_CAPACITY: usize = 8 * 1024 * 1024;
     /// Creates a new DtsReader by analyzing a test folder.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let base_path = path.as_ref();
@@ -115,7 +116,7 @@ impl DtsReader {
     /// Reads the binary header of a single .chn file.
     fn read_chn_header<P: AsRef<Path>>(path: P) -> Result<ChnHeader> {
         let file = File::open(path)?;
-        let mut reader = BufReader::new(file);
+        let mut reader = BufReader::with_capacity(Self::READ_BUFFER_CAPACITY, file);
 
         reader.seek(SeekFrom::Start(0))?;
         let magic_key = reader.read_u32::<LittleEndian>()?;
@@ -166,7 +167,7 @@ impl DtsReader {
         let num_samples_to_read = self.min_npts as usize;
         let mut adc_data = vec![0i16; num_samples_to_read];
         // We need to wrap the file in a BufReader to use read_i16_into
-        let mut reader = BufReader::new(file);
+        let mut reader = BufReader::with_capacity(Self::READ_BUFFER_CAPACITY, file);
         reader.read_i16_into::<LittleEndian>(&mut adc_data)?;
 
         // --- Perform scaling and offset calculations ---

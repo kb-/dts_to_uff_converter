@@ -190,6 +190,122 @@ fn format_data_line(buffer: &mut LineBuffer, values: &[f64]) {
 }
 
 /// Writes a single channel's data to a UFF Type 58 file using the ASCII layout emitted by MATLAB.
+fn write_uff58_impl<W: IoWrite>(
+    writer: &mut W,
+    data: &ChannelData,
+    track_name: &str,
+) -> Result<()> {
+    let mut line_buffer = LineBuffer::with_capacity(256);
+
+    // --- Block 1: UFF Type 58 Header (ASCII layout) ---
+    line_buffer.clear();
+    line_buffer.push_str(UFF_SEPARATOR);
+    line_buffer.write_line(writer)?;
+
+    line_buffer.clear();
+    line_buffer.push_str("    58");
+    line_buffer.write_line(writer)?;
+
+    line_buffer.clear();
+    line_buffer.write_line(writer)?;
+
+    let pt_label = truncate_to_width(track_name, 64);
+    line_buffer.clear();
+    line_buffer.push_str("Pt=");
+    line_buffer.push_str(&pt_label);
+    line_buffer.push_char(';');
+    line_buffer.write_line(writer)?;
+
+    line_buffer.clear();
+    line_buffer.write_line(writer)?;
+
+    line_buffer.clear();
+    line_buffer.push_str("NONE");
+    line_buffer.write_line(writer)?;
+
+    line_buffer.clear();
+    line_buffer.push_str("NONE");
+    line_buffer.write_line(writer)?;
+
+    let channel_label = truncate_to_width(track_name, 19);
+    let channel_field = format!("{:<19}", channel_label);
+    line_buffer.clear();
+    line_buffer.write_fmt(format_args!(
+        "    1         0    0         0 {}{}{}{}{}",
+        channel_field,
+        0,
+        format!("{:>4}", 0),
+        format!(" {:<19}", "NONE"),
+        format!("{:<4}{}", 1, 0)
+    ));
+    line_buffer.write_line(writer)?;
+
+    line_buffer.clear();
+    line_buffer.write_fmt(format_args!(
+        "{:>10}{:>10}{:>10}  ",
+        4,
+        data.time_series.len(),
+        1
+    ));
+    write_scientific(&mut line_buffer, 0.0, 11, 5).expect("writing record2 start time");
+    line_buffer.push_str("  ");
+    write_scientific(&mut line_buffer, 1.0 / data.sample_rate, 11, 5)
+        .expect("writing record2 time step");
+    line_buffer.push_str("  ");
+    write_scientific(&mut line_buffer, 0.0, 11, 5).expect("writing record2 abscissa start");
+    line_buffer.write_line(writer)?;
+
+    let abscissa_name = format!(" {:<19}", "Time");
+    let abscissa_units = format!("{: <48}", format!("  {}", truncate_to_width("s", 46)));
+    line_buffer.clear();
+    line_buffer.write_fmt(format_args!(
+        "{:>10}{:>5}{:>5}{:>5}{}{}",
+        17, 0, 0, 0, abscissa_name, abscissa_units
+    ));
+    line_buffer.write_line(writer)?;
+
+    let ordinate_name_field = format!(" {:<19}", channel_label);
+    let ordinate_units_field = format!(
+        "{: <35}",
+        format!("  {}", truncate_to_width(&data.units, 33))
+    );
+    line_buffer.clear();
+    line_buffer.write_fmt(format_args!(
+        "{:>10}{:>5}{:>5}{:>5}{}{}",
+        8, 0, 0, 0, ordinate_name_field, ordinate_units_field
+    ));
+    line_buffer.write_line(writer)?;
+
+    let none_name_field = format!(" {:<19}", "NONE");
+    let none_units_field = format!("{: <35}", format!("  {}", "NONE"));
+    line_buffer.clear();
+    line_buffer.write_fmt(format_args!(
+        "{:>10}{:>5}{:>5}{:>5}{}{}",
+        0, 0, 0, 0, none_name_field, none_units_field
+    ));
+    line_buffer.write_line(writer)?;
+    line_buffer.write_line(writer)?;
+
+    // --- ASCII Data Section ---
+    for chunk in data.time_series.chunks(4) {
+        format_data_line(&mut line_buffer, chunk);
+        line_buffer.write_line(writer)?;
+    }
+
+    // --- End of Block ---
+    line_buffer.clear();
+    line_buffer.push_str(UFF_SEPARATOR);
+    line_buffer.write_line(writer)?;
+
+    Ok(())
+}
+
+/// Writes a single channel to a UFF Type 58 writer without managing the underlying file handle.
+pub fn write_uff58<W: IoWrite>(writer: &mut W, data: &ChannelData, track_name: &str) -> Result<()> {
+    write_uff58_impl(writer, data, track_name)
+}
+
+/// Convenience helper that opens a file handle and writes a single channel.
 pub fn write_uff58_file<P: AsRef<Path>>(
     path: P,
     data: &ChannelData,
@@ -206,111 +322,8 @@ pub fn write_uff58_file<P: AsRef<Path>>(
         .truncate(!append)
         .open(path_ref)?;
 
-    let mut writer = BufWriter::new(file);
-
-    let mut line_buffer = LineBuffer::with_capacity(256);
-
-    // --- Block 1: UFF Type 58 Header (ASCII layout) ---
-    line_buffer.clear();
-    line_buffer.push_str(UFF_SEPARATOR);
-    line_buffer.write_line(&mut writer)?;
-
-    line_buffer.clear();
-    line_buffer.push_str("    58");
-    line_buffer.write_line(&mut writer)?;
-
-    line_buffer.clear();
-    line_buffer.write_line(&mut writer)?;
-
-    let pt_label = truncate_to_width(track_name, 64);
-    line_buffer.clear();
-    line_buffer.push_str("Pt=");
-    line_buffer.push_str(&pt_label);
-    line_buffer.push_char(';');
-    line_buffer.write_line(&mut writer)?;
-
-    line_buffer.clear();
-    line_buffer.write_line(&mut writer)?;
-
-    line_buffer.clear();
-    line_buffer.push_str("NONE");
-    line_buffer.write_line(&mut writer)?;
-
-    line_buffer.clear();
-    line_buffer.push_str("NONE");
-    line_buffer.write_line(&mut writer)?;
-
-    let channel_label = truncate_to_width(track_name, 19);
-    let channel_field = format!("{:<19}", channel_label);
-    line_buffer.clear();
-    line_buffer.write_fmt(format_args!(
-        "    1         0    0         0 {}{}{}{}{}",
-        channel_field,
-        0,
-        format!("{:>4}", 0),
-        format!(" {:<19}", "NONE"),
-        format!("{:<4}{}", 1, 0)
-    ));
-    line_buffer.write_line(&mut writer)?;
-
-    line_buffer.clear();
-    line_buffer.write_fmt(format_args!(
-        "{:>10}{:>10}{:>10}  ",
-        4,
-        data.time_series.len(),
-        1
-    ));
-    write_scientific(&mut line_buffer, 0.0, 11, 5).expect("writing record2 start time");
-    line_buffer.push_str("  ");
-    write_scientific(&mut line_buffer, 1.0 / data.sample_rate, 11, 5)
-        .expect("writing record2 time step");
-    line_buffer.push_str("  ");
-    write_scientific(&mut line_buffer, 0.0, 11, 5).expect("writing record2 abscissa start");
-    line_buffer.write_line(&mut writer)?;
-
-    let abscissa_name = format!(" {:<19}", "Time");
-    let abscissa_units = format!("{: <48}", format!("  {}", truncate_to_width("s", 46)));
-    line_buffer.clear();
-    line_buffer.write_fmt(format_args!(
-        "{:>10}{:>5}{:>5}{:>5}{}{}",
-        17, 0, 0, 0, abscissa_name, abscissa_units
-    ));
-    line_buffer.write_line(&mut writer)?;
-
-    let ordinate_name_field = format!(" {:<19}", channel_label);
-    let ordinate_units_field = format!(
-        "{: <35}",
-        format!("  {}", truncate_to_width(&data.units, 33))
-    );
-    line_buffer.clear();
-    line_buffer.write_fmt(format_args!(
-        "{:>10}{:>5}{:>5}{:>5}{}{}",
-        8, 0, 0, 0, ordinate_name_field, ordinate_units_field
-    ));
-    line_buffer.write_line(&mut writer)?;
-
-    let none_name_field = format!(" {:<19}", "NONE");
-    let none_units_field = format!("{: <35}", format!("  {}", "NONE"));
-    line_buffer.clear();
-    line_buffer.write_fmt(format_args!(
-        "{:>10}{:>5}{:>5}{:>5}{}{}",
-        0, 0, 0, 0, none_name_field, none_units_field
-    ));
-    line_buffer.write_line(&mut writer)?;
-    line_buffer.write_line(&mut writer)?;
-
-    // --- ASCII Data Section ---
-    let mut data_line = String::with_capacity(80);
-    for chunk in data.time_series.chunks(4) {
-        format_data_line(&mut line_buffer, chunk);
-        line_buffer.write_line(&mut writer)?;
-    }
-
-    // --- End of Block ---
-    line_buffer.clear();
-    line_buffer.push_str(UFF_SEPARATOR);
-    line_buffer.write_line(&mut writer)?;
-
+    let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, file);
+    write_uff58(&mut writer, data, track_name)?;
     writer.flush()?;
     Ok(())
 }
