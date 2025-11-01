@@ -83,6 +83,7 @@ pub struct ConversionReport {
 }
 
 /// A slice of samples to export for every processed track.
+/// Indices are zero-based and expressed in the native sample units of each track.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SampleSlice {
     /// Inclusive starting index of the slice.

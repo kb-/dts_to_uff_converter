@@ -32,7 +32,12 @@ pub struct ConvertDtsToUff {
     /// Optional comma-separated list of track names to write.
     #[serde(default)]
     track_list_output: Option<String>,
-    /// Optional slice (start:end) of samples to export for each track.
+    /// Optional slice of samples to export for each track, written as `start:end`.
+    /// Indices are zero-based, the start is inclusive, the end is exclusive, and step values
+    /// are not supported. Values must be non-negative integers expressed in native sample
+    /// units for every track. The same slice is applied to all tracks and requests that fall
+    /// outside the available samples will return an error instead of clamping. Omit the field
+    /// to export the full range.
     #[serde(default)]
     slice: Option<String>,
 }

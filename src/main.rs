@@ -25,7 +25,9 @@ struct Args {
     #[arg(short, long)]
     output: PathBuf,
 
-    /// Sample range to export for every track, in the form `start:end` (end exclusive)
+    /// Sample range to export for every track, in the form `start:end` using zero-based indices.
+    /// The start index is inclusive, the end index is exclusive, and values must be non-negative.
+    /// The same slice is applied to each track in its native sample units. Omit the flag to export every sample.
     #[arg(long, value_parser = parse_sample_slice)]
     slice: Option<SampleSlice>,
 
