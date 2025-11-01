@@ -79,12 +79,10 @@ fn main() -> Result<()> {
 
     processed_channels.sort_by_key(|(index, _, _)| *index);
 
-    let append_request = args.output.exists();
     let file = OpenOptions::new()
         .write(true)
         .create(true)
-        .append(append_request)
-        .truncate(!append_request)
+        .truncate(true)
         .open(&args.output)?;
     let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, file);
 

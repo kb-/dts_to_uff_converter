@@ -313,13 +313,11 @@ pub fn write_uff58_file<P: AsRef<Path>>(
     append_request: bool,
 ) -> Result<()> {
     let path_ref = path.as_ref();
-    let append = append_request || path_ref.exists();
-
     let file = OpenOptions::new()
         .write(true)
         .create(true)
-        .append(append)
-        .truncate(!append)
+        .append(append_request)
+        .truncate(!append_request)
         .open(path_ref)?;
 
     let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, file);
