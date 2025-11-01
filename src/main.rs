@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use dts_to_uff_converter::{dts, uff};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -8,12 +8,19 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 /// A Rust utility to convert a DTS Test Folder to a UFF (Universal File Format) Type 58 file.
+#[derive(ValueEnum, Clone, Copy, Debug)]
+enum OutputFormat { Ascii, Binary }
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Path to the input directory containing DTS files (.dts, .chn)
     #[arg(short, long)]
     input_dir: PathBuf,
+
+    /// Output format for the generated UFF file (`ascii` or `binary`)
+    #[arg(short, long, value_enum, default_value_t = OutputFormat::Ascii)]
+    format: OutputFormat,
 
     /// Path to the .txt file containing track names, one per line or comma-separated
     #[arg(short, long)]
@@ -88,7 +95,10 @@ fn main() -> Result<()> {
 
     for (_index, track_name, channel_data) in processed_channels {
         bar.set_message(track_name.clone());
-        uff::write_uff58(&mut writer, &channel_data, &track_name)?;
+        match args.format {
+            OutputFormat::Ascii => uff::write_uff58_ascii(&mut writer, &channel_data, &track_name)?,
+            OutputFormat::Binary => uff::write_uff58b(&mut writer, &channel_data, &track_name)?,
+        };
         bar.inc(1);
     }
 
