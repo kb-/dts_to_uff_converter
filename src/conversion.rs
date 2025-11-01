@@ -97,7 +97,7 @@ where
         .with_context(|| format!("Failed to read track names from {}", tracks_path.display()))?;
 
     let track_names: Vec<String> = track_names_raw
-        .split(|c| matches!(c, ',' | '\n' | '\r'))
+        .split([',', '\n', '\r'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)

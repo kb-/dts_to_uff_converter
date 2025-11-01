@@ -1,6 +1,7 @@
 mod handler;
 mod tools;
 
+use clap::Parser;
 use handler::ConverterServerHandler;
 use rust_mcp_sdk::schema::{
     Implementation, InitializeResult, ServerCapabilities, ServerCapabilitiesTools,
@@ -13,8 +14,22 @@ use rust_mcp_sdk::{
 };
 use std::sync::Arc;
 
+/// Start the DTS → UFF conversion MCP server over stdio.
+#[derive(Parser, Debug)]
+#[command(
+    author,
+    version,
+    about = "Runs the DTS to UFF converter as a Model Context Protocol (MCP) server",
+    long_about = "Launches a stdio-based MCP server that exposes the `convert_dts_to_uff` tool.
+Use this binary when integrating the converter with clients that speak the MCP standard."
+)]
+struct Cli;
+
 #[tokio::main]
 async fn main() -> SdkResult<()> {
+    // Parse CLI arguments so `--help` and `--version` output is available to users.
+    let _args = Cli::parse();
+
     let server_details = InitializeResult {
         server_info: Implementation {
             name: "dts-to-uff-converter".to_string(),
@@ -37,7 +52,7 @@ async fn main() -> SdkResult<()> {
     };
 
     let transport = StdioTransport::new(TransportOptions::default())?;
-    let handler = ConverterServerHandler::default();
+    let handler = ConverterServerHandler;
 
     let server: Arc<ServerRuntime> =
         server_runtime::create_server(server_details, transport, handler);
