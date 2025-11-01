@@ -55,6 +55,26 @@ The tool expects the following parameters:
 - `output_path`: Absolute path, including filename, where the generated `.uff` file will be written (must be a file path; the parent directory should already exist).
 - `format`: Optional output format, either `ascii` (default) or `binary`.
 
+### MCP client configuration example
+
+Most MCP-compatible clients (Claude Desktop, Cursor, VS Code, etc.) read a JSON configuration that follows the MCP JSON standard introduced in FastMCP 2.4.0. Your configuration file should **only** contain the top-level `mcpServers` object—do not wrap it inside legacy schemas like a `servers` array, or the client will reject the entry.
+
+```json
+{
+  "mcpServers": {
+    "dts-to-uff": {
+      "command": "/absolute/path/to/mcp_server",
+      "args": [],
+      "env": {
+        "RUST_LOG": "info"
+      }
+    }
+  }
+}
+```
+
+Update the `command` field to point to the compiled `mcp_server` binary (or replace it with a command such as `cargo run --bin mcp_server --release` if you prefer to launch via Cargo) and remove the `env` block if no additional environment variables are needed. Copy this object into the location your MCP client expects—e.g., `~/.claude/claude_desktop_config.json`, `~/.cursor/mcp.json`, or `.vscode/mcp.json` inside a workspace. If your client requires an explicit transport specification (for example, `"transport": "http"` for a remote server), add it directly inside the server object shown above.
+
 ## Development
 
 - Format code with `cargo fmt --all`.
