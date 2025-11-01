@@ -1,5 +1,5 @@
-use dts_to_uff_converter::dts;
 use dts_to_uff_converter::conversion::{self, OutputFormat, SampleSlice};
+use dts_to_uff_converter::dts;
 use rust_mcp_sdk::schema::{schema_utils::CallToolError, CallToolResult, TextContent};
 use rust_mcp_sdk::{macros::mcp_tool, macros::JsonSchema, tool_box};
 use serde::{Deserialize, Serialize};
@@ -256,6 +256,9 @@ impl ListDtsTracks {
         }
 
         Ok(CallToolResult::text_content(vec![TextContent::from(table)]))
+    }
+}
+
 fn parse_track_selection(value: &str) -> Result<Vec<String>, String> {
     let tracks: Vec<String> = value
         .split(',')
