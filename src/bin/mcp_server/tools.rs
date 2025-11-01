@@ -4,6 +4,7 @@ use dts_to_uff_converter::dts;
 use rust_mcp_sdk::schema::{schema_utils::CallToolError, CallToolResult, TextContent};
 use rust_mcp_sdk::{macros::mcp_tool, macros::JsonSchema, tool_box};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -261,27 +262,159 @@ impl ListDtsTracks {
             )]));
         }
 
-        let mut table = String::new();
-        let _ = writeln!(
-            &mut table,
-            "Track metadata for '{}' ({} track(s)):",
-            input_display,
-            track_metadata.len()
-        );
-        if let Some(ref path) = tracks_path {
-            let display = path.to_string_lossy();
-            let _ = writeln!(&mut table, "Track names loaded from '{}'.", display);
-        }
+        let resolved_names: Vec<String> = track_metadata
+            .iter()
+            .enumerate()
+            .map(|(index, track)| {
+                track_names
+                    .as_ref()
+                    .and_then(|names| names.get(index))
+                    .map(|name| name.trim())
+                    .filter(|name| !name.is_empty())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| {
+                        let fallback = track.name.trim();
+                        if fallback.is_empty() {
+                            format!("Track {}", index + 1)
+                        } else {
+                            fallback.to_string()
+                        }
+                    })
+            })
+            .collect();
+
+        let mut warnings = Vec::new();
         if let Some(ref names) = track_names {
             if names.len() != track_metadata.len() {
-                let _ = writeln!(
-                    &mut table,
-                    "⚠️ Track name count ({}) differs from metadata entries ({}).",
+                warnings.push(format!(
+                    "Track name count ({}) differs from metadata entries ({}).",
                     names.len(),
                     track_metadata.len()
-                );
+                ));
             }
         }
+
+        let mut sampling_rate_counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut unit_counts: BTreeMap<String, usize> = BTreeMap::new();
+        for (index, track) in track_metadata.iter().enumerate() {
+            *sampling_rate_counts
+                .entry(format_sampling_rate(track.sampling_rate))
+                .or_default() += 1;
+
+            let unit_key = track.eu.trim();
+            let unit_entry = if unit_key.is_empty() { "—" } else { unit_key };
+            *unit_counts.entry(unit_entry.to_string()).or_default() += 1;
+
+            if track.description.trim().is_empty() {
+                warnings.push(format!(
+                    "Track '{}' is missing a description.",
+                    resolved_names
+                        .get(index)
+                        .map(|name| name.as_str())
+                        .unwrap_or("")
+                ));
+            }
+        }
+
+        warnings.sort();
+        warnings.dedup();
+
+        let mut message = String::new();
+        let track_count = track_metadata.len();
+        let _ = writeln!(&mut message, "📊 **Track metadata overview**");
+        let _ = writeln!(&mut message);
+        let _ = writeln!(&mut message, "- **Input directory:** `{}`", input_display);
+        match tracks_path {
+            Some(ref path) => {
+                let display = path.to_string_lossy();
+                let names_loaded_display = track_names
+                    .as_ref()
+                    .map(|names| {
+                        let count = names.len();
+                        format!("{} name{}", count, if count == 1 { "" } else { "s" })
+                    })
+                    .unwrap_or_else(|| "no usable names".to_string());
+                let _ = writeln!(
+                    &mut message,
+                    "- **Track names file:** `{}` ({})",
+                    display, names_loaded_display
+                );
+            }
+            None => {
+                let _ = writeln!(&mut message, "- **Track names file:** not provided");
+            }
+        }
+        let _ = writeln!(&mut message, "- **Tracks discovered:** {}", track_count);
+
+        if !sampling_rate_counts.is_empty() {
+            let sampling_rate_summary: Vec<String> = sampling_rate_counts
+                .into_iter()
+                .map(|(rate, count)| {
+                    format!(
+                        "{} Hz ({} track{})",
+                        rate,
+                        count,
+                        if count == 1 { "" } else { "s" }
+                    )
+                })
+                .collect();
+            let _ = writeln!(
+                &mut message,
+                "- **Sampling rates:** {}",
+                sampling_rate_summary.join(", ")
+            );
+        }
+
+        if !unit_counts.is_empty() {
+            let unit_summary: Vec<String> = unit_counts
+                .into_iter()
+                .map(|(unit, count)| {
+                    format!(
+                        "{} ({} track{})",
+                        unit,
+                        count,
+                        if count == 1 { "" } else { "s" }
+                    )
+                })
+                .collect();
+            let _ = writeln!(
+                &mut message,
+                "- **Units present:** {}",
+                unit_summary.join(", ")
+            );
+        }
+
+        if !resolved_names.is_empty() {
+            let preview_count = resolved_names.len().min(5);
+            let preview = resolved_names
+                .iter()
+                .take(preview_count)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            if track_count > preview_count {
+                let remaining = track_count - preview_count;
+                let _ = writeln!(
+                    &mut message,
+                    "- **Track preview:** {} … (+{} more)",
+                    preview, remaining
+                );
+            } else {
+                let _ = writeln!(&mut message, "- **Track preview:** {}", preview);
+            }
+        }
+
+        if !warnings.is_empty() {
+            let _ = writeln!(&mut message, "\n**Warnings:**");
+            for warning in warnings {
+                let _ = writeln!(&mut message, "- {warning}");
+            }
+        }
+
+        let _ = writeln!(&mut message, "\n**Track details**");
+        let _ = writeln!(&mut message);
+
+        let mut table = String::new();
         let _ = writeln!(
             &mut table,
             "| # | Name | Sampling Rate (Hz) | Description | Sensitivity | Serial Number | Units |"
@@ -307,16 +440,14 @@ impl ListDtsTracks {
             } else {
                 track.eu.trim()
             };
-            let name = track_names
-                .as_ref()
-                .and_then(|names| names.get(index))
-                .map(|name| name.as_str())
-                .unwrap_or_else(|| track.name.trim());
             let _ = writeln!(
                 &mut table,
                 "| {} | {} | {:.0} | {} | {:.6} | {} | {} |",
                 index + 1,
-                name,
+                resolved_names
+                    .get(index)
+                    .map(|name| name.as_str())
+                    .unwrap_or(""),
                 track.sampling_rate,
                 description,
                 track.sensitivity,
@@ -325,7 +456,11 @@ impl ListDtsTracks {
             );
         }
 
-        Ok(CallToolResult::text_content(vec![TextContent::from(table)]))
+        message.push_str(&table);
+
+        Ok(CallToolResult::text_content(vec![TextContent::from(
+            message,
+        )]))
     }
 }
 
@@ -363,4 +498,12 @@ fn load_track_names(path: &Path) -> anyhow::Result<Vec<String>> {
     }
 
     Ok(names)
+}
+
+fn format_sampling_rate(value: f64) -> String {
+    if (value.fract()).abs() <= f64::EPSILON {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.6}")
+    }
 }
