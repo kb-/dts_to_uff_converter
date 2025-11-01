@@ -310,17 +310,25 @@ pub enum Uff58Format {
     Binary58b,
 }
 
-pub fn write_uff58_ascii<W: IoWrite>(writer: &mut W, data: &ChannelData, track_name: &str) -> Result<()> {
+pub fn write_uff58_ascii<W: IoWrite>(
+    writer: &mut W,
+    data: &ChannelData,
+    track_name: &str,
+) -> Result<()> {
     write_uff58_impl(writer, data, track_name)
 }
 
 /// Convenience helper that opens a file handle and writes a single channel.
-
+///
 /// Write UFF 58 in "58b" (binary) variant:
 /// - ASCII header with a "b" line (byte order, fp format, n_ascii_lines, n_bytes, ...)
 /// - Records mirror our ASCII writer for fields
 /// - Data payload written as f32 in selected endian (like reference Python code)
-pub fn write_uff58b<W: IoWrite>(writer: &mut W, data: &ChannelData, track_name: &str) -> Result<()> {
+pub fn write_uff58b<W: IoWrite>(
+    writer: &mut W,
+    data: &ChannelData,
+    track_name: &str,
+) -> Result<()> {
     let mut line_buffer = LineBuffer::with_capacity(256);
 
     // Separator and type
@@ -343,8 +351,10 @@ pub fn write_uff58b<W: IoWrite>(writer: &mut W, data: &ChannelData, track_name: 
 
     // Type line with trailing "b"
     {
-        let header_line = format!("    58b{:>6}{:>6}{:>12}{:>12}{:>6}{:>6}{:>12}{:>12}",
-            bo, fp_format, n_ascii_lines, n_bytes, 0, 0, 0, 0);
+        let header_line = format!(
+            "    58b{:>6}{:>6}{:>12}{:>12}{:>6}{:>6}{:>12}{:>12}",
+            bo, fp_format, n_ascii_lines, n_bytes, 0, 0, 0, 0
+        );
         line_buffer.clear();
         line_buffer.push_str(&header_line);
         line_buffer.write_line(writer)?;
@@ -376,14 +386,13 @@ pub fn write_uff58b<W: IoWrite>(writer: &mut W, data: &ChannelData, track_name: 
     // Real data at nodal DOF, response entity name is the channel label (first 19 chars)
     let channel_label = truncate_to_width(track_name, 19);
     let channel_field = format!("{:<19}", channel_label);
+    let zero_field = format!("{:>4}", 0);
+    let none_field = format!(" {:<19}", "NONE");
+    let flag_field = format!("{:<4}{}", 1, 0);
     line_buffer.clear();
     line_buffer.write_fmt(format_args!(
         "    1         0    0         0 {}{}{}{}{}",
-        channel_field,
-        0,
-        format!("{:>4}", 0),
-        format!(" {:<19}", "NONE"),
-        format!("{:<4}{}", 1, 0)
+        channel_field, 0, zero_field, none_field, flag_field
     ));
     line_buffer.write_line(writer)?;
 
@@ -391,13 +400,14 @@ pub fn write_uff58b<W: IoWrite>(writer: &mut W, data: &ChannelData, track_name: 
     line_buffer.clear();
     line_buffer.write_fmt(format_args!(
         "{:>10}{:>10}{:>10}  ",
-        2,          // ord_data_type (single precision for binary payload)
+        2, // ord_data_type (single precision for binary payload)
         num_pts,
-        1           // abscissa_spacing (even)
+        1 // abscissa_spacing (even)
     ));
     write_scientific(&mut line_buffer, 0.0, 11, 5).expect("writing abscissa min");
     line_buffer.push_str("  ");
-    write_scientific(&mut line_buffer, 1.0 / data.sample_rate, 11, 5).expect("writing abscissa inc");
+    write_scientific(&mut line_buffer, 1.0 / data.sample_rate, 11, 5)
+        .expect("writing abscissa inc");
     line_buffer.push_str("  ");
     write_scientific(&mut line_buffer, 0.0, 11, 5).expect("writing z-axis value");
     line_buffer.write_line(writer)?;
@@ -414,7 +424,10 @@ pub fn write_uff58b<W: IoWrite>(writer: &mut W, data: &ChannelData, track_name: 
 
     // Record 9 (Ordinate characteristics)
     let ordinate_name_field = format!(" {:<19}", channel_label);
-    let ordinate_units_field = format!("{: <35}", format!("  {}", truncate_to_width(&data.units, 33)));
+    let ordinate_units_field = format!(
+        "{: <35}",
+        format!("  {}", truncate_to_width(&data.units, 33))
+    );
     line_buffer.clear();
     line_buffer.write_fmt(format_args!(
         "{:>10}{:>5}{:>5}{:>5}{}{}",
@@ -463,7 +476,12 @@ pub fn write_uff58b<W: IoWrite>(writer: &mut W, data: &ChannelData, track_name: 
 }
 
 /// Dispatcher that writes either ASCII (58) or Binary (58b).
-pub fn write_uff58_with_format<W: IoWrite>(writer: &mut W, data: &ChannelData, track_name: &str, fmt: Uff58Format) -> Result<()> {
+pub fn write_uff58_with_format<W: IoWrite>(
+    writer: &mut W,
+    data: &ChannelData,
+    track_name: &str,
+    fmt: Uff58Format,
+) -> Result<()> {
     match fmt {
         Uff58Format::Ascii => write_uff58_ascii(writer, data, track_name),
         Uff58Format::Binary58b => write_uff58b(writer, data, track_name),
@@ -497,5 +515,11 @@ pub fn write_uff58_file<P: AsRef<Path>>(
     track_name: &str,
     append_request: bool,
 ) -> Result<()> {
-    write_uff58_file_with_format(path, data, track_name, append_request, Uff58Format::Binary58b)
+    write_uff58_file_with_format(
+        path,
+        data,
+        track_name,
+        append_request,
+        Uff58Format::Binary58b,
+    )
 }
