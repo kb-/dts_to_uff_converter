@@ -1,5 +1,5 @@
-use dts_to_uff_converter::conversion::{self, OutputFormat};
 use dts_to_uff_converter::dts;
+use dts_to_uff_converter::conversion::{self, OutputFormat, SampleSlice};
 use rust_mcp_sdk::schema::{schema_utils::CallToolError, CallToolResult, TextContent};
 use rust_mcp_sdk::{macros::mcp_tool, macros::JsonSchema, tool_box};
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,17 @@ pub struct ConvertDtsToUff {
     /// Output format (`ascii` or `binary`). Defaults to `ascii`.
     #[serde(default)]
     format: Option<String>,
+    /// Optional comma-separated list of track names to write.
+    #[serde(default)]
+    track_list_output: Option<String>,
+    /// Optional slice of samples to export for each track, written as `start:end`.
+    /// Indices are zero-based, the start is inclusive, the end is exclusive, and step values
+    /// are not supported. Values must be non-negative integers expressed in native sample
+    /// units for every track. The same slice is applied to all tracks and requests that fall
+    /// outside the available samples will return an error instead of clamping. Omit the field
+    /// to export the full range.
+    #[serde(default)]
+    slice: Option<String>,
 }
 
 impl ConvertDtsToUff {
@@ -49,16 +60,33 @@ impl ConvertDtsToUff {
                 Some("`tracks_file` cannot be empty".to_string()),
             ));
         }
-        if self.output_path.trim().is_empty() {
+
+        let output_path_str = self.output_path.trim();
+        if output_path_str.is_empty() {
             return Err(CallToolError::invalid_arguments(
                 "convert_dts_to_uff",
                 Some("`output_path` cannot be empty".to_string()),
             ));
         }
 
+        let track_selection = self
+            .track_list_output
+            .as_ref()
+            .map(|value| value.trim())
+            .map(parse_track_selection)
+            .transpose()
+            .map_err(|err| CallToolError::invalid_arguments("convert_dts_to_uff", Some(err)))?;
+
+        let slice = self
+            .slice
+            .as_deref()
+            .map(SampleSlice::from_str)
+            .transpose()
+            .map_err(|err| CallToolError::invalid_arguments("convert_dts_to_uff", Some(err)))?;
+
         let input_dir = PathBuf::from(&self.input_dir);
         let tracks_file = PathBuf::from(&self.tracks_file);
-        let output_path = PathBuf::from(&self.output_path);
+        let output_path = PathBuf::from(output_path_str);
 
         let format = self
             .format
@@ -72,8 +100,22 @@ impl ConvertDtsToUff {
         let output_display = output_path.to_string_lossy().into_owned();
         let format_display = format.to_string();
 
-        let report = tokio::task::spawn_blocking(move || {
-            conversion::convert(&input_dir, &tracks_file, &output_path, format)
+        let report = tokio::task::spawn_blocking({
+            let input_dir = input_dir.clone();
+            let tracks_file = tracks_file.clone();
+            let output_path = output_path.clone();
+            let track_selection = track_selection.clone();
+            move || {
+                let track_filter = track_selection.as_deref();
+                conversion::convert_with_options(
+                    &input_dir,
+                    &tracks_file,
+                    &output_path,
+                    format,
+                    slice,
+                    track_filter,
+                )
+            }
         })
         .await
         .map_err(|err| CallToolError::from_message(format!("Background task failed: {err}")))?
@@ -83,6 +125,10 @@ impl ConvertDtsToUff {
             "Converted {} channel(s) from '{}' to '{}' using {} format.",
             report.channel_count, input_display, output_display, format_display
         );
+
+        if let Some(selection) = track_selection.as_ref() {
+            let _ = write!(&mut summary, " Requested tracks: {}.", selection.join(", "));
+        }
 
         if report.track_name_count != report.channel_count {
             let _ = write!(
@@ -210,5 +256,17 @@ impl ListDtsTracks {
         }
 
         Ok(CallToolResult::text_content(vec![TextContent::from(table)]))
+fn parse_track_selection(value: &str) -> Result<Vec<String>, String> {
+    let tracks: Vec<String> = value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    if tracks.is_empty() {
+        Err("At least one track name must be provided".to_string())
+    } else {
+        Ok(tracks)
     }
 }

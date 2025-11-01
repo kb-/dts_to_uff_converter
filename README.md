@@ -27,6 +27,8 @@ Arguments:
 - `--tracks` (`-t`): Text file listing channel names (one per line or comma separated).
 - `--output` (`-o`): Destination path for the generated UFF file.
 - `--format` (`-f`): Either `ascii` (default) or `binary`.
+- `--slice`: Limit the exported samples for every track using zero-based `start:end` indices (end-exclusive). The same slice is applied to every selected track, expressed in native sample units for that track. Leave the flag unset to export all samples.
+- `--track-list-output`: Comma-separated list of track names to include in the UFF output.
 
 Use `dts_to_uff_converter --help` to view the full CLI reference.
 
