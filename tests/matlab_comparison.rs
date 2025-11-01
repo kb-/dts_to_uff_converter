@@ -12,7 +12,7 @@ fn rust_output_matches_matlab_reference() -> Result<()> {
     let data_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("Bancairon_G1_training6_small");
     let tracks_path = data_dir.join("tracks.txt");
     let track_names: Vec<String> = fs::read_to_string(&tracks_path)?
-        .split(|c| c == ',' || c == '\n' || c == '\r')
+        .split(|c| [',', '\n', '\r'].contains(&c))
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())

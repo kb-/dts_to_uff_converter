@@ -74,7 +74,7 @@ impl DtsReader {
             .filter_map(|entry| {
                 entry.ok().and_then(|e| {
                     let path = e.path();
-                    if path.is_file() && path.extension().map_or(false, |ext| ext == "chn") {
+                    if path.is_file() && path.extension().is_some_and(|ext| ext == "chn") {
                         Some(path)
                     } else {
                         None
@@ -223,12 +223,7 @@ impl DtsReader {
 fn find_file_by_extension(dir: &Path, extension: &str) -> Result<PathBuf> {
     fs::read_dir(dir)?
         .filter_map(|entry| entry.ok())
-        .find(|entry| {
-            entry
-                .path()
-                .extension()
-                .map_or(false, |ext| ext == extension)
-        })
+        .find(|entry| entry.path().extension().is_some_and(|ext| ext == extension))
         .map(|entry| entry.path())
         .ok_or_else(|| anyhow!("No '.{}' file found in directory {:?}", extension, dir))
 }
@@ -267,13 +262,12 @@ fn parse_dts_metadata(path: &Path) -> Result<Vec<(AnalogInputChannel, f64)>> {
                 }
                 _ => {}
             },
-            Event::Empty(ref e) => match e.name().as_ref() {
-                b"AnalogInputChanel" => {
+            Event::Empty(ref e) => {
+                if e.name().as_ref() == b"AnalogInputChanel" {
                     let start_sample = *module_stack.last().unwrap_or(&0.0);
                     collect_channel(e, start_sample, &mut channels)?;
                 }
-                _ => {}
-            },
+            }
             Event::End(ref e) => {
                 if e.name().as_ref() == b"Module" {
                     module_stack.pop();
