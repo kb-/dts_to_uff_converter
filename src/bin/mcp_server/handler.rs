@@ -35,6 +35,7 @@ impl ServerHandler for ConverterServerHandler {
 
         match tool_params {
             ConverterTools::ConvertDtsToUff(tool) => tool.call_tool().await,
+            ConverterTools::ListDtsTracks(tool) => tool.call_tool().await,
         }
     }
 }
