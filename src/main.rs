@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     // 1. Read track names from the specified text file
     let track_names_str = fs::read_to_string(&args.tracks)?;
     let track_names: Vec<String> = track_names_str
-        .split(|c| c == ',' || c == '\n' || c == '\r')
+        .split(|c| [',', '\n', '\r'].contains(&c))
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
