@@ -4,6 +4,7 @@ use dts_to_uff_converter::dts;
 use rust_mcp_sdk::schema::{schema_utils::CallToolError, CallToolResult, TextContent};
 use rust_mcp_sdk::{macros::mcp_tool, macros::JsonSchema, tool_box};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -256,12 +257,6 @@ impl ListDtsTracks {
         .map_err(|err| CallToolError::from_message(format!("Background task failed: {err}")))?
         .map_err(|err| CallToolError::from_message(err.to_string()))?;
 
-        if track_metadata.is_empty() {
-            return Ok(CallToolResult::text_content(vec![TextContent::from(
-                format!("No tracks found in '{input_display}'."),
-            )]));
-        }
-
         let resolved_names: Vec<String> = track_metadata
             .iter()
             .enumerate()
@@ -294,173 +289,171 @@ impl ListDtsTracks {
             }
         }
 
-        let mut sampling_rate_counts: BTreeMap<String, usize> = BTreeMap::new();
-        let mut unit_counts: BTreeMap<String, usize> = BTreeMap::new();
-        for (index, track) in track_metadata.iter().enumerate() {
-            *sampling_rate_counts
-                .entry(format_sampling_rate(track.sampling_rate))
-                .or_default() += 1;
+        let track_count = track_metadata.len();
+        let mut missing_description_count = 0usize;
+        let mut missing_unit_count = 0usize;
+        let mut unsupported_unit_counts: BTreeMap<String, usize> = BTreeMap::new();
 
-            let unit_key = track.eu.trim();
-            let unit_entry = if unit_key.is_empty() { "—" } else { unit_key };
-            *unit_counts.entry(unit_entry.to_string()).or_default() += 1;
+        let tracks: Vec<ListDtsTrack> = track_metadata
+            .iter()
+            .enumerate()
+            .map(|(index, track)| {
+                let name = resolved_names
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Track {}", index + 1));
 
-            if track.description.trim().is_empty() {
-                warnings.push(format!(
-                    "Track '{}' is missing a description.",
-                    resolved_names
-                        .get(index)
-                        .map(|name| name.as_str())
-                        .unwrap_or("")
-                ));
-            }
+                let description = track.description.trim();
+                if description.is_empty() {
+                    missing_description_count += 1;
+                }
+                let description = description.to_string();
+
+                let serial = track.serial_number.trim();
+                let serial = if serial.is_empty() {
+                    None
+                } else {
+                    Some(serial.to_string())
+                };
+
+                let sensitivity = track.sensitivity;
+                let sensitivity_m_v_per_g = if sensitivity.is_finite() {
+                    Some(sensitivity)
+                } else {
+                    None
+                };
+
+                let raw_unit = track.eu.trim();
+                let mut extras: Option<JsonMap<String, JsonValue>> = None;
+                let unit = if raw_unit.is_empty() {
+                    missing_unit_count += 1;
+                    let mut extras_map = JsonMap::new();
+                    extras_map.insert("unitDefaultedToG".to_string(), JsonValue::Bool(true));
+                    extras = Some(extras_map);
+                    "g".to_string()
+                } else if raw_unit.eq_ignore_ascii_case("g") {
+                    "g".to_string()
+                } else {
+                    *unsupported_unit_counts
+                        .entry(raw_unit.to_string())
+                        .or_default() += 1;
+                    let mut extras_map = JsonMap::new();
+                    extras_map.insert(
+                        "rawUnit".to_string(),
+                        JsonValue::String(raw_unit.to_string()),
+                    );
+                    extras_map.insert("unitDefaultedToG".to_string(), JsonValue::Bool(true));
+                    extras = Some(extras_map);
+                    "g".to_string()
+                };
+
+                if let Some(ref mut extras_map) = extras {
+                    if description.is_empty() {
+                        extras_map.insert("descriptionPresent".to_string(), JsonValue::Bool(false));
+                    }
+                } else if description.is_empty() {
+                    let mut extras_map = JsonMap::new();
+                    extras_map.insert("descriptionPresent".to_string(), JsonValue::Bool(false));
+                    extras = Some(extras_map);
+                }
+
+                ListDtsTrack {
+                    channel: (index + 1) as u32,
+                    name,
+                    description,
+                    sampling_rate_hz: track.sampling_rate.round() as u64,
+                    sensitivity_m_v_per_g,
+                    serial,
+                    unit,
+                    extras,
+                }
+            })
+            .collect();
+
+        if missing_description_count > 0 {
+            warnings.push(format!(
+                "{} track{} missing descriptions.",
+                missing_description_count,
+                if missing_description_count == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ));
+        }
+        if missing_unit_count > 0 {
+            warnings.push(format!(
+                "{} track{} missing units; defaulted to 'g'.",
+                missing_unit_count,
+                if missing_unit_count == 1 { "" } else { "s" }
+            ));
+        }
+        if !unsupported_unit_counts.is_empty() {
+            let total: usize = unsupported_unit_counts.values().sum();
+            let mut details: Vec<String> = unsupported_unit_counts
+                .into_iter()
+                .map(|(unit, count)| format!("{count}×{unit}"))
+                .collect();
+            details.sort();
+            warnings.push(format!(
+                "{} track{} used unsupported units: {} (reported as 'g').",
+                total,
+                if total == 1 { "" } else { "s" },
+                details.join(", ")
+            ));
         }
 
         warnings.sort();
         warnings.dedup();
 
-        let mut message = String::new();
-        let track_count = track_metadata.len();
-        let _ = writeln!(&mut message, "📊 **Track metadata overview**");
-        let _ = writeln!(&mut message);
-        let _ = writeln!(&mut message, "- **Input directory:** `{}`", input_display);
-        match tracks_path {
-            Some(ref path) => {
-                let display = path.to_string_lossy();
-                let names_loaded_display = track_names
-                    .as_ref()
-                    .map(|names| {
-                        let count = names.len();
-                        format!("{} name{}", count, if count == 1 { "" } else { "s" })
-                    })
-                    .unwrap_or_else(|| "no usable names".to_string());
-                let _ = writeln!(
-                    &mut message,
-                    "- **Track names file:** `{}` ({})",
-                    display, names_loaded_display
-                );
-            }
-            None => {
-                let _ = writeln!(&mut message, "- **Track names file:** not provided");
-            }
-        }
-        let _ = writeln!(&mut message, "- **Tracks discovered:** {}", track_count);
+        let mut summary = format!(
+            "Track metadata for '{}' — {} track{}.",
+            input_display,
+            track_count,
+            if track_count == 1 { "" } else { "s" }
+        );
 
-        if !sampling_rate_counts.is_empty() {
-            let sampling_rate_summary: Vec<String> = sampling_rate_counts
-                .into_iter()
-                .map(|(rate, count)| {
-                    format!(
-                        "{} Hz ({} track{})",
-                        rate,
-                        count,
-                        if count == 1 { "" } else { "s" }
-                    )
-                })
-                .collect();
-            let _ = writeln!(
-                &mut message,
-                "- **Sampling rates:** {}",
-                sampling_rate_summary.join(", ")
-            );
-        }
-
-        if !unit_counts.is_empty() {
-            let unit_summary: Vec<String> = unit_counts
-                .into_iter()
-                .map(|(unit, count)| {
-                    format!(
-                        "{} ({} track{})",
-                        unit,
-                        count,
-                        if count == 1 { "" } else { "s" }
-                    )
-                })
-                .collect();
-            let _ = writeln!(
-                &mut message,
-                "- **Units present:** {}",
-                unit_summary.join(", ")
-            );
-        }
-
-        if !resolved_names.is_empty() {
-            let preview_count = resolved_names.len().min(5);
-            let preview = resolved_names
-                .iter()
-                .take(preview_count)
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join(", ");
-            if track_count > preview_count {
-                let remaining = track_count - preview_count;
-                let _ = writeln!(
-                    &mut message,
-                    "- **Track preview:** {} … (+{} more)",
-                    preview, remaining
-                );
-            } else {
-                let _ = writeln!(&mut message, "- **Track preview:** {}", preview);
-            }
+        if let Some(ref path) = tracks_path {
+            summary.push_str(&format!(
+                " Track names loaded from '{}'.",
+                path.to_string_lossy()
+            ));
         }
 
         if !warnings.is_empty() {
-            let _ = writeln!(&mut message, "\n**Warnings:**");
-            for warning in warnings {
-                let _ = writeln!(&mut message, "- {warning}");
-            }
+            summary.push(' ');
+            summary.push_str("Warnings: ");
+            summary.push_str(&warnings.join("; "));
         }
 
-        let _ = writeln!(&mut message, "\n**Track details**");
-        let _ = writeln!(&mut message);
-
-        let mut table = String::new();
-        let _ = writeln!(
-            &mut table,
-            "| # | Name | Sampling Rate (Hz) | Description | Sensitivity | Serial Number | Units |"
-        );
-        let _ = writeln!(
-            &mut table,
-            "|---|------|---------------------|-------------|-------------|---------------|-------|"
-        );
-
-        for (index, track) in track_metadata.iter().enumerate() {
-            let description = if track.description.trim().is_empty() {
-                "—"
+        let structured = ListDtsTracksStructuredContent {
+            source: input_display,
+            count: track_count as u32,
+            page: Some(0),
+            page_size: if track_count > 0 {
+                Some(track_count as u32)
             } else {
-                track.description.trim()
-            };
-            let serial = if track.serial_number.trim().is_empty() {
-                "—"
-            } else {
-                track.serial_number.trim()
-            };
-            let units = if track.eu.trim().is_empty() {
-                "—"
-            } else {
-                track.eu.trim()
-            };
-            let _ = writeln!(
-                &mut table,
-                "| {} | {} | {:.0} | {} | {:.6} | {} | {} |",
-                index + 1,
-                resolved_names
-                    .get(index)
-                    .map(|name| name.as_str())
-                    .unwrap_or(""),
-                track.sampling_rate,
-                description,
-                track.sensitivity,
-                serial,
-                units
-            );
-        }
+                None
+            },
+            tracks,
+        };
 
-        message.push_str(&table);
+        let structured_value = serde_json::to_value(&structured).map_err(|err| {
+            CallToolError::from_message(format!(
+                "Failed to serialize track metadata response: {err}"
+            ))
+        })?;
 
-        Ok(CallToolResult::text_content(vec![TextContent::from(
-            message,
-        )]))
+        let structured_map = structured_value.as_object().cloned().ok_or_else(|| {
+            CallToolError::from_message(
+                "Structured content was not serialized as an object".to_string(),
+            )
+        })?;
+
+        Ok(
+            CallToolResult::text_content(vec![TextContent::from(summary)])
+                .with_structured_content(structured_map),
+        )
     }
 }
 
@@ -500,10 +493,32 @@ fn load_track_names(path: &Path) -> anyhow::Result<Vec<String>> {
     Ok(names)
 }
 
-fn format_sampling_rate(value: f64) -> String {
-    if (value.fract()).abs() <= f64::EPSILON {
-        format!("{value:.0}")
-    } else {
-        format!("{value:.6}")
-    }
+#[derive(Debug, Serialize, JsonSchema)]
+struct ListDtsTracksStructuredContent {
+    source: String,
+    count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<u32>,
+    #[serde(rename = "pageSize", skip_serializing_if = "Option::is_none")]
+    page_size: Option<u32>,
+    tracks: Vec<ListDtsTrack>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct ListDtsTrack {
+    channel: u32,
+    name: String,
+    description: String,
+    #[serde(rename = "samplingRateHz")]
+    sampling_rate_hz: u64,
+    #[serde(
+        rename = "sensitivity_mV_per_g",
+        skip_serializing_if = "Option::is_none"
+    )]
+    sensitivity_m_v_per_g: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    serial: Option<String>,
+    unit: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extras: Option<JsonMap<String, JsonValue>>,
 }
