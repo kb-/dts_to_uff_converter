@@ -1,5 +1,8 @@
 use anyhow::Result;
-use dts_to_uff_converter::{dts, uff};
+use dts_to_uff_converter::{
+    dts,
+    uff::{self, Uff58Format},
+};
 use std::fs;
 use std::path::Path;
 use tempfile::NamedTempFile;
@@ -24,7 +27,13 @@ fn rust_output_matches_matlab_reference() -> Result<()> {
 
     for (i, track_name) in track_names.iter().enumerate() {
         let channel_data = reader.read_track(i)?;
-        uff::write_uff58_file(&output_path, &channel_data, track_name, append_request)?;
+        uff::write_uff58_file_with_format(
+            &output_path,
+            &channel_data,
+            track_name,
+            append_request,
+            Uff58Format::Ascii,
+        )?;
         append_request = true;
     }
 
