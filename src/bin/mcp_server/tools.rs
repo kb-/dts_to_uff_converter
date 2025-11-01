@@ -20,11 +20,14 @@ tool_box!(ConverterTools, [ConvertDtsToUff]);
 )]
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ConvertDtsToUff {
-    /// Absolute path to the folder containing .dts/.chn files.
+    /// Absolute path to the DTS export directory containing `.dts`/`.chn` files. Pass a
+    /// directory path, not an individual file.
     input_dir: String,
-    /// Path to the text file with track names (newline or comma separated).
+    /// Absolute path to the text file with track names (newline or comma separated). Pass a
+    /// file path, not a directory.
     tracks_file: String,
-    /// Location where the generated .uff file should be written.
+    /// Absolute path (including filename) where the generated `.uff` file should be written.
+    /// Pass a file path; the parent directory must already exist.
     output_path: String,
     /// Output format (`ascii` or `binary`). Defaults to `ascii`.
     #[serde(default)]

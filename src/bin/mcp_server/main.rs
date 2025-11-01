@@ -43,8 +43,10 @@ async fn main() -> SdkResult<()> {
         meta: None,
         instructions: Some(
             "Use the `convert_dts_to_uff` tool to turn a DTS folder into a UFF Type 58 file. \
-             Provide absolute paths that are readable by the server container. Track names can be\
-             newline- or comma-separated in the supplied text file."
+             `input_dir` must point to the DTS export directory, `tracks_file` must be a text file, \
+             and `output_path` must be the target `.uff` file (not just a folder). Provide absolute \
+             paths that are readable by the server container. Track names can be newline- or \
+             comma-separated in the supplied text file."
                 .trim()
                 .to_string(),
         ),

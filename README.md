@@ -46,6 +46,13 @@ mcp_server --help
 
 When the server starts it registers a single tool, `convert_dts_to_uff`. Provide absolute paths that are accessible to the server process when invoking the tool from an MCP client.
 
+The tool expects the following parameters:
+
+- `input_dir`: Absolute path to the DTS export directory containing `.dts`/`.chn` files (must be a directory).
+- `tracks_file`: Absolute path to a text file listing track names, separated by newlines or commas (must be a file).
+- `output_path`: Absolute path, including filename, where the generated `.uff` file will be written (must be a file path; the parent directory should already exist).
+- `format`: Optional output format, either `ascii` (default) or `binary`.
+
 ## Development
 
 - Format code with `cargo fmt --all`.
