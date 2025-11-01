@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
-use dts_to_uff_converter::conversion::{convert_with_progress, ConversionProgress, OutputFormat};
+use dts_to_uff_converter::conversion::{
+    convert_with_progress, ConversionProgress, OutputFormat, SampleSlice,
+};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 
@@ -22,6 +24,33 @@ struct Args {
     /// Output UFF file path
     #[arg(short, long)]
     output: PathBuf,
+
+    /// Sample range to export for every track, in the form `start:end` (end exclusive)
+    #[arg(long, value_parser = parse_sample_slice)]
+    slice: Option<SampleSlice>,
+
+    /// Comma-separated list of track names to write into the output file.
+    #[arg(long = "track-list-output", value_parser = parse_track_selection)]
+    track_list_output: Option<Vec<String>>,
+}
+
+fn parse_sample_slice(value: &str) -> Result<SampleSlice, String> {
+    value.parse()
+}
+
+fn parse_track_selection(value: &str) -> Result<Vec<String>, String> {
+    let tracks: Vec<String> = value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    if tracks.is_empty() {
+        Err("At least one track name must be provided".to_string())
+    } else {
+        Ok(tracks)
+    }
 }
 
 fn main() -> Result<()> {
@@ -39,6 +68,8 @@ fn main() -> Result<()> {
         &args.tracks,
         &args.output,
         args.format,
+        args.slice,
+        args.track_list_output.as_deref(),
         |update| match update {
             ConversionProgress::Started {
                 track_name_count,
@@ -46,12 +77,15 @@ fn main() -> Result<()> {
             } => {
                 println!("Found {} track names.", track_name_count);
                 println!("Reading metadata from folder: {:?}", &args.input_dir);
-                println!("Found {} channels in the DTS folder.", channel_count);
-                if track_name_count != channel_count {
+                println!("Will export {} channel(s).", channel_count);
+                if args.track_list_output.is_none() && track_name_count != channel_count {
                     println!(
                         "Warning: Number of track names ({}) does not match number of channels ({}).",
                         track_name_count, channel_count
                     );
+                }
+                if let Some(selection) = args.track_list_output.as_ref() {
+                    println!("Requested tracks: {}.", selection.join(", "));
                 }
                 bar.set_length(channel_count as u64);
             }
