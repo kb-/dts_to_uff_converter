@@ -1,10 +1,11 @@
+use anyhow::Context as _;
 use dts_to_uff_converter::conversion::{self, OutputFormat, SampleSlice};
 use dts_to_uff_converter::dts;
 use rust_mcp_sdk::schema::{schema_utils::CallToolError, CallToolResult, TextContent};
 use rust_mcp_sdk::{macros::mcp_tool, macros::JsonSchema, tool_box};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 tool_box!(ConverterTools, [ConvertDtsToUff, ListDtsTracks]);
@@ -121,41 +122,69 @@ impl ConvertDtsToUff {
         .map_err(|err| CallToolError::from_message(format!("Background task failed: {err}")))?
         .map_err(|err| CallToolError::from_message(err.to_string()))?;
 
-        let mut summary = format!(
-            "Converted {} channel(s) from '{}' to '{}' using {} format.",
-            report.channel_count, input_display, output_display, format_display
+        let tracks_display = tracks_file.to_string_lossy().into_owned();
+
+        let mut summary = String::new();
+        let _ = writeln!(&mut summary, "✅ **DTS to UFF conversion succeeded**");
+        let _ = writeln!(&mut summary);
+        let _ = writeln!(&mut summary, "- **Input directory:** `{}`", input_display);
+        let _ = writeln!(&mut summary, "- **Track names file:** `{}`", tracks_display);
+        let _ = writeln!(&mut summary, "- **Output file:** `{}`", output_display);
+        let _ = writeln!(&mut summary, "- **Format:** `{}`", format_display);
+        let _ = writeln!(
+            &mut summary,
+            "- **Channels written:** {}",
+            report.channel_count
+        );
+        let _ = writeln!(
+            &mut summary,
+            "- **Track names provided:** {}",
+            report.track_name_count
         );
 
-        if let Some(selection) = track_selection.as_ref() {
-            let _ = write!(&mut summary, " Requested tracks: {}.", selection.join(", "));
+        match track_selection.as_ref() {
+            Some(selection) if !selection.is_empty() => {
+                let _ = writeln!(
+                    &mut summary,
+                    "- **Requested tracks:** {}",
+                    selection.join(", ")
+                );
+            }
+            _ => {
+                let _ = writeln!(&mut summary, "- **Requested tracks:** All");
+            }
+        }
+
+        if let Some(range) = slice.map(|value| format!("{}:{}", value.start, value.end)) {
+            let _ = writeln!(&mut summary, "- **Sample slice:** `{}`", range);
+        } else {
+            let _ = writeln!(&mut summary, "- **Sample slice:** full range");
         }
 
         if report.track_name_count != report.channel_count {
-            let _ = write!(
+            let _ = writeln!(
                 &mut summary,
-                " Track name count ({}) differed from channel count ({}).",
+                "\n⚠️ Track name count ({}) differed from channels processed ({}).",
                 report.track_name_count, report.channel_count
             );
         }
 
+        if !report.warnings.is_empty() {
+            let _ = writeln!(&mut summary, "\n**Warnings:**");
+            for warning in &report.warnings {
+                let _ = writeln!(&mut summary, "- {warning}");
+            }
+        }
+
         if !report.processed_track_names.is_empty() {
-            let preview: Vec<_> = report
-                .processed_track_names
-                .iter()
-                .take(5)
-                .map(String::as_str)
-                .collect();
-            let ellipsis = if report.processed_track_names.len() > preview.len() {
-                " …"
-            } else {
-                ""
-            };
-            let _ = write!(
-                &mut summary,
-                " First tracks: {}{}.",
-                preview.join(", "),
-                ellipsis
-            );
+            let _ = writeln!(&mut summary, "\n**Track preview:**");
+            for (idx, name) in report.processed_track_names.iter().take(5).enumerate() {
+                let _ = writeln!(&mut summary, "{}. {}", idx + 1, name);
+            }
+            if report.processed_track_names.len() > 5 {
+                let remaining = report.processed_track_names.len() - 5;
+                let _ = writeln!(&mut summary, "… and {remaining} more track(s).");
+            }
         }
 
         Ok(CallToolResult::text_content(vec![TextContent::from(
@@ -179,6 +208,9 @@ pub struct ListDtsTracks {
     /// Absolute path to the DTS export directory containing `.dts`/`.chn` files. Pass a
     /// directory path, not an individual file.
     input_dir: String,
+    /// Optional absolute path to the text file with track names used for UFF export ordering.
+    #[serde(default)]
+    tracks_file: Option<String>,
 }
 
 impl ListDtsTracks {
@@ -190,14 +222,33 @@ impl ListDtsTracks {
             ));
         }
 
+        if let Some(path) = self.tracks_file.as_ref() {
+            if path.trim().is_empty() {
+                return Err(CallToolError::invalid_arguments(
+                    "list_dts_tracks",
+                    Some("`tracks_file` cannot be empty when provided".to_string()),
+                ));
+            }
+        }
+
         let input_dir = PathBuf::from(&self.input_dir);
         let input_display = input_dir.to_string_lossy().into_owned();
+        let tracks_path = self
+            .tracks_file
+            .as_ref()
+            .map(|value| PathBuf::from(value.trim()));
 
-        let track_metadata = tokio::task::spawn_blocking({
+        let (track_metadata, track_names) = tokio::task::spawn_blocking({
             let input_dir = input_dir.clone();
-            move || -> anyhow::Result<Vec<dts::TrackMetadata>> {
+            let tracks_path = tracks_path.clone();
+            move || -> anyhow::Result<(Vec<dts::TrackMetadata>, Option<Vec<String>>)> {
                 let reader = dts::DtsReader::new(&input_dir)?;
-                Ok(reader.track_metadata())
+                let metadata = reader.track_metadata();
+                let track_names = match tracks_path {
+                    Some(ref path) => Some(load_track_names(path)?),
+                    None => None,
+                };
+                Ok((metadata, track_names))
             }
         })
         .await
@@ -217,6 +268,20 @@ impl ListDtsTracks {
             input_display,
             track_metadata.len()
         );
+        if let Some(ref path) = tracks_path {
+            let display = path.to_string_lossy();
+            let _ = writeln!(&mut table, "Track names loaded from '{}'.", display);
+        }
+        if let Some(ref names) = track_names {
+            if names.len() != track_metadata.len() {
+                let _ = writeln!(
+                    &mut table,
+                    "⚠️ Track name count ({}) differs from metadata entries ({}).",
+                    names.len(),
+                    track_metadata.len()
+                );
+            }
+        }
         let _ = writeln!(
             &mut table,
             "| # | Name | Sampling Rate (Hz) | Description | Sensitivity | Serial Number | Units |"
@@ -242,11 +307,16 @@ impl ListDtsTracks {
             } else {
                 track.eu.trim()
             };
+            let name = track_names
+                .as_ref()
+                .and_then(|names| names.get(index))
+                .map(|name| name.as_str())
+                .unwrap_or_else(|| track.name.trim());
             let _ = writeln!(
                 &mut table,
                 "| {} | {} | {:.0} | {} | {:.6} | {} | {} |",
                 index + 1,
-                track.name.trim(),
+                name,
                 track.sampling_rate,
                 description,
                 track.sensitivity,
@@ -272,4 +342,25 @@ fn parse_track_selection(value: &str) -> Result<Vec<String>, String> {
     } else {
         Ok(tracks)
     }
+}
+
+fn load_track_names(path: &Path) -> anyhow::Result<Vec<String>> {
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read track names from {}", path.display()))?;
+
+    let names: Vec<String> = contents
+        .split([',', '\n', '\r'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    if names.is_empty() {
+        anyhow::bail!(
+            "Track name file '{}' did not contain any usable entries",
+            path.display()
+        );
+    }
+
+    Ok(names)
 }
