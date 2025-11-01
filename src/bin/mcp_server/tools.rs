@@ -1,4 +1,5 @@
 use dts_to_uff_converter::conversion::{self, OutputFormat};
+use dts_to_uff_converter::dts;
 use rust_mcp_sdk::schema::{schema_utils::CallToolError, CallToolResult, TextContent};
 use rust_mcp_sdk::{macros::mcp_tool, macros::JsonSchema, tool_box};
 use serde::{Deserialize, Serialize};
@@ -6,7 +7,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-tool_box!(ConverterTools, [ConvertDtsToUff]);
+tool_box!(ConverterTools, [ConvertDtsToUff, ListDtsTracks]);
 
 #[mcp_tool(
     name = "convert_dts_to_uff",
@@ -114,5 +115,100 @@ impl ConvertDtsToUff {
         Ok(CallToolResult::text_content(vec![TextContent::from(
             summary,
         )]))
+    }
+}
+
+#[mcp_tool(
+    name = "list_dts_tracks",
+    description = "List metadata for each track inside a DTS export directory.",
+    title = "List DTS track metadata",
+    idempotent_hint = true,
+    destructive_hint = false,
+    open_world_hint = false,
+    read_only_hint = true,
+    meta = r#"{"version": "0.1.0"}"#
+)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ListDtsTracks {
+    /// Absolute path to the DTS export directory containing `.dts`/`.chn` files. Pass a
+    /// directory path, not an individual file.
+    input_dir: String,
+}
+
+impl ListDtsTracks {
+    pub async fn call_tool(&self) -> Result<CallToolResult, CallToolError> {
+        if self.input_dir.trim().is_empty() {
+            return Err(CallToolError::invalid_arguments(
+                "list_dts_tracks",
+                Some("`input_dir` cannot be empty".to_string()),
+            ));
+        }
+
+        let input_dir = PathBuf::from(&self.input_dir);
+        let input_display = input_dir.to_string_lossy().into_owned();
+
+        let track_metadata = tokio::task::spawn_blocking({
+            let input_dir = input_dir.clone();
+            move || -> anyhow::Result<Vec<dts::TrackMetadata>> {
+                let reader = dts::DtsReader::new(&input_dir)?;
+                Ok(reader.track_metadata())
+            }
+        })
+        .await
+        .map_err(|err| CallToolError::from_message(format!("Background task failed: {err}")))?
+        .map_err(|err| CallToolError::from_message(err.to_string()))?;
+
+        if track_metadata.is_empty() {
+            return Ok(CallToolResult::text_content(vec![TextContent::from(
+                format!("No tracks found in '{input_display}'."),
+            )]));
+        }
+
+        let mut table = String::new();
+        let _ = writeln!(
+            &mut table,
+            "Track metadata for '{}' ({} track(s)):",
+            input_display,
+            track_metadata.len()
+        );
+        let _ = writeln!(
+            &mut table,
+            "| # | Name | Sampling Rate (Hz) | Description | Sensitivity | Serial Number | Units |"
+        );
+        let _ = writeln!(
+            &mut table,
+            "|---|------|---------------------|-------------|-------------|---------------|-------|"
+        );
+
+        for (index, track) in track_metadata.iter().enumerate() {
+            let description = if track.description.trim().is_empty() {
+                "—"
+            } else {
+                track.description.trim()
+            };
+            let serial = if track.serial_number.trim().is_empty() {
+                "—"
+            } else {
+                track.serial_number.trim()
+            };
+            let units = if track.eu.trim().is_empty() {
+                "—"
+            } else {
+                track.eu.trim()
+            };
+            let _ = writeln!(
+                &mut table,
+                "| {} | {} | {:.0} | {} | {:.6} | {} | {} |",
+                index + 1,
+                track.name.trim(),
+                track.sampling_rate,
+                description,
+                track.sensitivity,
+                serial,
+                units
+            );
+        }
+
+        Ok(CallToolResult::text_content(vec![TextContent::from(table)]))
     }
 }

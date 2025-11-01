@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct AnalogInputChannel {
+    pub name: String,
+    pub description: String,
+    pub sensitivity: f64,
+    pub serial_number: String,
     pub proportional_to_excitation: bool,
     pub is_inverted: bool,
     pub measured_excitation_voltage: f64,
@@ -44,6 +48,16 @@ pub struct ChannelData {
     pub time_series: Vec<f64>,
     pub sample_rate: f64,
     pub units: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TrackMetadata {
+    pub name: String,
+    pub sampling_rate: f64,
+    pub description: String,
+    pub sensitivity: f64,
+    pub serial_number: String,
+    pub eu: String,
 }
 
 /// A reader that mimics the DTS.m class behavior.
@@ -217,6 +231,21 @@ impl DtsReader {
     pub fn channel_count(&self) -> usize {
         self.chn_files.len()
     }
+
+    pub fn track_metadata(&self) -> Vec<TrackMetadata> {
+        self.xml_metadata
+            .iter()
+            .zip(self.chn_headers.iter())
+            .map(|((channel, _start_sample), header)| TrackMetadata {
+                name: channel.name.clone(),
+                sampling_rate: header.sample_rate,
+                description: channel.description.clone(),
+                sensitivity: channel.sensitivity,
+                serial_number: channel.serial_number.clone(),
+                eu: channel.eu.clone(),
+            })
+            .collect()
+    }
 }
 
 /// Helper to find the first file with a given extension in a directory.
@@ -288,6 +317,10 @@ fn collect_channel(
     start_sample: f64,
     channels: &mut Vec<(AnalogInputChannel, f64)>,
 ) -> Result<()> {
+    let mut name = String::new();
+    let mut description = String::new();
+    let mut sensitivity = f64::NAN;
+    let mut serial_number = String::new();
     let mut proportional_to_excitation = false;
     let mut is_inverted = false;
     let mut measured_excitation_voltage = f64::NAN;
@@ -306,6 +339,18 @@ fn collect_channel(
             .with_context(|| format!("Failed to decode value for attribute '{}'.", key_str))?;
 
         match key {
+            b"ChannelDescriptionString" => {
+                name = value.into_owned();
+            }
+            b"Description" => {
+                description = value.into_owned();
+            }
+            b"Sensitivity" => {
+                sensitivity = parse_f64(value.as_ref());
+            }
+            b"SerialNumber" => {
+                serial_number = value.into_owned();
+            }
             b"ProportionalToExcitation" => {
                 proportional_to_excitation = value.as_ref().eq_ignore_ascii_case("True");
             }
@@ -338,8 +383,16 @@ fn collect_channel(
         }
     }
 
+    if name.is_empty() {
+        name = description.clone();
+    }
+
     channels.push((
         AnalogInputChannel {
+            name,
+            description,
+            sensitivity,
+            serial_number,
             proportional_to_excitation,
             is_inverted,
             measured_excitation_voltage,
