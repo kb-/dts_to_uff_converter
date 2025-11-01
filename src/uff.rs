@@ -50,7 +50,7 @@ impl LineBuffer {
         let original_len = self.text.len();
         if original_len < 80 {
             let pad_len = 80 - original_len;
-            self.text.extend(std::iter::repeat(' ').take(pad_len));
+            self.text.extend(std::iter::repeat_n(' ', pad_len));
         }
 
         writer.write_all(self.text.as_bytes())?;
@@ -242,14 +242,13 @@ pub fn write_uff58_file<P: AsRef<Path>>(
 
     let channel_label = truncate_to_width(track_name, 19);
     let channel_field = format!("{:<19}", channel_label);
+    let zero_field = format!("{:>4}", 0);
+    let none_field = format!(" {:<19}", "NONE");
+    let flag_field = format!("{:<4}{}", 1, 0);
     line_buffer.clear();
     line_buffer.write_fmt(format_args!(
         "    1         0    0         0 {}{}{}{}{}",
-        channel_field,
-        0,
-        format!("{:>4}", 0),
-        format!(" {:<19}", "NONE"),
-        format!("{:<4}{}", 1, 0)
+        channel_field, 0, zero_field, none_field, flag_field
     ));
     line_buffer.write_line(&mut writer)?;
 
@@ -300,7 +299,6 @@ pub fn write_uff58_file<P: AsRef<Path>>(
     line_buffer.write_line(&mut writer)?;
 
     // --- ASCII Data Section ---
-    let mut data_line = String::with_capacity(80);
     for chunk in data.time_series.chunks(4) {
         format_data_line(&mut line_buffer, chunk);
         line_buffer.write_line(&mut writer)?;
