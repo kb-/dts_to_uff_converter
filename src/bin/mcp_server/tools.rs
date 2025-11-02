@@ -1,11 +1,13 @@
 use anyhow::Context as _;
 use dts_to_uff_converter::conversion::{self, OutputFormat, SampleSlice};
 use dts_to_uff_converter::dts;
-use rust_mcp_sdk::schema::{schema_utils::CallToolError, CallToolResult, TextContent};
+use rust_mcp_sdk::schema::{
+    schema_utils::CallToolError, CallToolResult, TextContent, ToolOutputSchema,
+};
 use rust_mcp_sdk::{macros::mcp_tool, macros::JsonSchema, tool_box};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -454,6 +456,38 @@ impl ListDtsTracks {
             CallToolResult::text_content(vec![TextContent::from(summary)])
                 .with_structured_content(structured_map),
         )
+    }
+
+    pub fn output_schema() -> Option<ToolOutputSchema> {
+        let schema_value = ListDtsTracksStructuredContent::json_schema();
+
+        let required: Vec<String> = schema_value
+            .get("required")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let properties: Option<HashMap<String, JsonMap<String, JsonValue>>> = schema_value
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .map(|props| {
+                props
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        value
+                            .as_object()
+                            .cloned()
+                            .map(|object| (key.clone(), object))
+                    })
+                    .collect()
+            });
+
+        Some(ToolOutputSchema::new(required, properties))
     }
 }
 
