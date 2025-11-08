@@ -429,25 +429,55 @@ impl ListDtsTracks {
             summary.push_str(&warnings.join("; "));
         }
 
-        if !tracks.is_empty() {
-            summary.push_str("\n\nPreview:\n");
-            for (index, track) in tracks.iter().take(5).enumerate() {
-                let preview_description = if track.description.is_empty() {
+        let sanitize_cell_value = |value: &str| {
+            value
+                .replace('|', "\\|")
+                .replace('\n', "<br>")
+                .replace('\r', "")
+        };
+
+        if tracks.is_empty() {
+            summary.push_str("\n\n_No tracks found._");
+        } else {
+            summary.push_str(
+                "\n\n| Channel | Name | Description | Sampling Rate Hz | Sensitivity mV/g | Serial | Unit | Extras |\n",
+            );
+            summary.push_str("| --- | --- | --- | --- | --- | --- | --- | --- |\n");
+
+            for track in &tracks {
+                let description = if track.description.trim().is_empty() {
                     "(no description)"
                 } else {
-                    track.description.as_str()
+                    track.description.trim()
                 };
-                let _ = writeln!(
-                    summary,
-                    "{}. Channel {} — {} :: {}",
-                    index + 1,
+
+                let sensitivity_display = track
+                    .sensitivity_m_v_per_g
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "NaN".to_string());
+
+                let serial_display = track.serial.as_deref().unwrap_or("");
+
+                let extras_value = track
+                    .extras
+                    .as_ref()
+                    .map(|map| JsonValue::Object(map.clone()))
+                    .unwrap_or_else(|| JsonValue::Object(JsonMap::new()));
+                let extras_display =
+                    serde_json::to_string(&extras_value).unwrap_or_else(|_| "{}".to_string());
+
+                let row = format!(
+                    "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
                     track.channel,
-                    track.name,
-                    preview_description
+                    sanitize_cell_value(&track.name),
+                    sanitize_cell_value(description),
+                    track.sampling_rate_hz,
+                    sanitize_cell_value(&sensitivity_display),
+                    sanitize_cell_value(serial_display),
+                    sanitize_cell_value(&track.unit),
+                    sanitize_cell_value(&extras_display)
                 );
-            }
-            if tracks.len() > 5 {
-                let _ = writeln!(summary, "… and {} more track(s).", tracks.len() - 5);
+                summary.push_str(&row);
             }
         }
 
