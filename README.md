@@ -75,6 +75,30 @@ Most MCP-compatible clients (Claude Desktop, Cursor, VS Code, etc.) read a JSON 
 
 Update the `command` field to point to the compiled `mcp_server` binary (or replace it with a command such as `cargo run --bin mcp_server --release` if you prefer to launch via Cargo) and remove the `env` block if no additional environment variables are needed. Copy this object into the location your MCP client expects—e.g., `~/.claude/claude_desktop_config.json`, `~/.cursor/mcp.json`, or `.vscode/mcp.json` inside a workspace. If your client requires an explicit transport specification (for example, `"transport": "http"` for a remote server), add it directly inside the server object shown above.
 
+### MCP Inspector
+
+To exercise the server via the [MCP Inspector](https://www.npmjs.com/package/@modelcontextprotocol/inspector), create an `inspector.mcp.json` file in the repo root:
+
+```json
+{
+  "mcpServers": {
+    "dts-to-uff": {
+      "command": "target\\release\\mcp_server.exe",
+      "args": [],
+      "transport": { "type": "stdio" }
+    }
+  }
+}
+```
+
+Then launch the Inspector from the same directory:
+
+```bash
+npx @modelcontextprotocol/inspector --config ./inspector.mcp.json --server dts-to-uff
+```
+
+Leave the process running, open the URL it prints (e.g., `http://localhost:6274/`), and press **Connect** in the UI to inspect the `convert_dts_to_uff` tool. Set `DANGEROUSLY_OMIT_AUTH=true` before running the command if you want to skip the auth token locally.
+
 ## Development
 
 - Format code with `cargo fmt --all`.

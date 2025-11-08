@@ -1,11 +1,13 @@
 use anyhow::Context as _;
 use dts_to_uff_converter::conversion::{self, OutputFormat, SampleSlice};
 use dts_to_uff_converter::dts;
-use rust_mcp_sdk::schema::{schema_utils::CallToolError, CallToolResult, TextContent};
+use rust_mcp_sdk::schema::{
+    schema_utils::CallToolError, CallToolResult, TextContent, ToolOutputSchema,
+};
 use rust_mcp_sdk::{macros::mcp_tool, macros::JsonSchema, tool_box};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -454,6 +456,77 @@ impl ListDtsTracks {
             CallToolResult::text_content(vec![TextContent::from(summary)])
                 .with_structured_content(structured_map),
         )
+    }
+
+    pub fn output_schema() -> Option<ToolOutputSchema> {
+        let schema_value = ListDtsTracksStructuredContent::json_schema();
+
+        let required: Vec<String> = schema_value
+            .get("required")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut properties: Option<HashMap<String, JsonMap<String, JsonValue>>> = schema_value
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .map(|props| {
+                props
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        value
+                            .as_object()
+                            .cloned()
+                            .map(|object| (key.clone(), object))
+                    })
+                    .collect()
+            });
+
+        // Normalize non-standard schemas emitted for flexible fields.
+        // Some validators reject "type": "unknown". Treat extras as a free-form object.
+        if let Some(props) = properties.as_mut() {
+            if let Some(tracks_schema) = props.get_mut("tracks") {
+                if let Some(items_obj) = tracks_schema
+                    .get_mut("items")
+                    .and_then(|v| v.as_object_mut())
+                {
+                    if let Some(item_props) = items_obj
+                        .get_mut("properties")
+                        .and_then(|v| v.as_object_mut())
+                    {
+                        if let Some(extras_obj) = item_props
+                            .get_mut("extras")
+                            .and_then(|v| v.as_object_mut())
+                        {
+                            // If the generator emitted an unsupported type for extras, replace it.
+                            if let Some(type_val) = extras_obj.get_mut("type") {
+                                if type_val.as_str() == Some("unknown") {
+                                    *type_val = JsonValue::String("object".to_string());
+                                }
+                            } else {
+                                // Ensure we at least declare it as an object.
+                                extras_obj.insert(
+                                    "type".to_string(),
+                                    JsonValue::String("object".to_string()),
+                                );
+                            }
+
+                            // Allow arbitrary key/value pairs in extras.
+                            extras_obj
+                                .entry("additionalProperties".to_string())
+                                .or_insert(JsonValue::Bool(true));
+                        }
+                    }
+                }
+            }
+        }
+
+        Some(ToolOutputSchema::new(required, properties))
     }
 }
 

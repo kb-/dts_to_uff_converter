@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "dts-to-uff": {
+      "command": "target\\release\\mcp_server.exe",
+      "args": [],
+      "transport": { "type": "stdio" }
+    }
+  }
+}

@@ -6,7 +6,7 @@ use rust_mcp_sdk::schema::{
 use rust_mcp_sdk::{mcp_server::ServerHandler, McpServer};
 use std::sync::Arc;
 
-use crate::tools::ConverterTools;
+use crate::tools::{ConverterTools, ListDtsTracks};
 
 #[derive(Default)]
 pub struct ConverterServerHandler;
@@ -18,10 +18,21 @@ impl ServerHandler for ConverterServerHandler {
         _request: ListToolsRequest,
         _runtime: Arc<dyn McpServer>,
     ) -> std::result::Result<ListToolsResult, RpcError> {
+        let mut tools = ConverterTools::tools();
+
+        if let Some(tool) = tools
+            .iter_mut()
+            .find(|tool| tool.name == ListDtsTracks::tool_name())
+        {
+            if let Some(output_schema) = ListDtsTracks::output_schema() {
+                tool.output_schema = Some(output_schema);
+            }
+        }
+
         Ok(ListToolsResult {
             meta: None,
             next_cursor: None,
-            tools: ConverterTools::tools(),
+            tools,
         })
     }
 
