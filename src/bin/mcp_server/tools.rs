@@ -408,9 +408,10 @@ impl ListDtsTracks {
         warnings.sort();
         warnings.dedup();
 
+        let table_title = format!("DTS track metadata for {}", input_display);
+
         let mut summary = format!(
-            "Track metadata for '{}' — {} track{}.",
-            input_display,
+            "**{table_title}** — {} track{} found.",
             track_count,
             if track_count == 1 { "" } else { "s" }
         );
@@ -428,16 +429,68 @@ impl ListDtsTracks {
             summary.push_str(&warnings.join("; "));
         }
 
+        if !tracks.is_empty() {
+            summary.push_str("\n\nPreview:\n");
+            for (index, track) in tracks.iter().take(5).enumerate() {
+                let preview_description = if track.description.is_empty() {
+                    "(no description)"
+                } else {
+                    track.description.as_str()
+                };
+                let _ = writeln!(
+                    summary,
+                    "{}. Channel {} — {} :: {}",
+                    index + 1,
+                    track.channel,
+                    track.name,
+                    preview_description
+                );
+            }
+            if tracks.len() > 5 {
+                let _ = writeln!(summary, "… and {} more track(s).", tracks.len() - 5);
+            }
+        }
+
+        let columns = vec![
+            TableColumn::number("channel", "Channel"),
+            TableColumn::text("name", "Name"),
+            TableColumn::text("description", "Description"),
+            TableColumn::number("samplingRateHz", "Sampling Rate Hz"),
+            TableColumn::number("sensitivity_mV_per_g", "Sensitivity mV/g"),
+            TableColumn::text("serial", "Serial"),
+            TableColumn::text("unit", "Unit"),
+            TableColumn::object("extras", "Extras"),
+        ];
+
+        let rows: Vec<TableRow> = tracks
+            .iter()
+            .map(|track| TableRow {
+                kind: "row".to_string(),
+                cells: vec![
+                    TableCell::number(track.channel as f64),
+                    TableCell::text(track.name.clone()),
+                    TableCell::text(track.description.clone()),
+                    TableCell::number(track.sampling_rate_hz as f64),
+                    track
+                        .sensitivity_m_v_per_g
+                        .map(TableCell::number)
+                        .unwrap_or_else(|| TableCell::text(String::from(""))),
+                    track
+                        .serial
+                        .clone()
+                        .map(TableCell::text)
+                        .unwrap_or_else(|| TableCell::text(String::from(""))),
+                    TableCell::text(track.unit.clone()),
+                    TableCell::object(track.extras.clone().unwrap_or_default()),
+                ],
+            })
+            .collect();
+
         let structured = ListDtsTracksStructuredContent {
-            source: input_display,
-            count: track_count as u32,
-            page: Some(0),
-            page_size: if track_count > 0 {
-                Some(track_count as u32)
-            } else {
-                None
-            },
-            tracks,
+            kind: "table".to_string(),
+            title: table_title,
+            columns,
+            rows,
         };
 
         let structured_value = serde_json::to_value(&structured).map_err(|err| {
@@ -490,36 +543,52 @@ impl ListDtsTracks {
         // Normalize non-standard schemas emitted for flexible fields.
         // Some validators reject "type": "unknown". Treat extras as a free-form object.
         if let Some(props) = properties.as_mut() {
-            if let Some(tracks_schema) = props.get_mut("tracks") {
-                if let Some(items_obj) = tracks_schema
+            if let Some(columns_schema) = props.get_mut("columns") {
+                if let Some(items_obj) = columns_schema
                     .get_mut("items")
-                    .and_then(|v| v.as_object_mut())
+                    .and_then(|value| value.as_object_mut())
                 {
-                    if let Some(item_props) = items_obj
-                        .get_mut("properties")
-                        .and_then(|v| v.as_object_mut())
-                    {
-                        if let Some(extras_obj) = item_props
-                            .get_mut("extras")
-                            .and_then(|v| v.as_object_mut())
-                        {
-                            // If the generator emitted an unsupported type for extras, replace it.
-                            if let Some(type_val) = extras_obj.get_mut("type") {
-                                if type_val.as_str() == Some("unknown") {
-                                    *type_val = JsonValue::String("object".to_string());
-                                }
-                            } else {
-                                // Ensure we at least declare it as an object.
-                                extras_obj.insert(
-                                    "type".to_string(),
-                                    JsonValue::String("object".to_string()),
-                                );
-                            }
+                    items_obj
+                        .entry("type".to_string())
+                        .or_insert(JsonValue::String("object".to_string()));
+                }
+            }
 
-                            // Allow arbitrary key/value pairs in extras.
-                            extras_obj
-                                .entry("additionalProperties".to_string())
-                                .or_insert(JsonValue::Bool(true));
+            if let Some(rows_schema) = props.get_mut("rows") {
+                if let Some(items_obj) = rows_schema
+                    .get_mut("items")
+                    .and_then(|value| value.as_object_mut())
+                {
+                    if let Some(row_props) = items_obj
+                        .get_mut("properties")
+                        .and_then(|value| value.as_object_mut())
+                    {
+                        if let Some(cells_schema) = row_props.get_mut("cells") {
+                            if let Some(cells_items) = cells_schema
+                                .get_mut("items")
+                                .and_then(|value| value.as_object_mut())
+                            {
+                                cells_items
+                                    .entry("type".to_string())
+                                    .or_insert(JsonValue::String("object".to_string()));
+
+                                if let Some(cell_props) = cells_items
+                                    .get_mut("properties")
+                                    .and_then(|value| value.as_object_mut())
+                                {
+                                    if let Some(object_schema) = cell_props
+                                        .get_mut("object")
+                                        .and_then(|value| value.as_object_mut())
+                                    {
+                                        object_schema
+                                            .entry("type".to_string())
+                                            .or_insert(JsonValue::String("object".to_string()));
+                                        object_schema
+                                            .entry("additionalProperties".to_string())
+                                            .or_insert(JsonValue::Bool(true));
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -568,13 +637,11 @@ fn load_track_names(path: &Path) -> anyhow::Result<Vec<String>> {
 
 #[derive(Debug, Serialize, JsonSchema)]
 struct ListDtsTracksStructuredContent {
-    source: String,
-    count: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    page: Option<u32>,
-    #[serde(rename = "pageSize", skip_serializing_if = "Option::is_none")]
-    page_size: Option<u32>,
-    tracks: Vec<ListDtsTrack>,
+    #[serde(rename = "type")]
+    kind: String,
+    title: String,
+    columns: Vec<TableColumn>,
+    rows: Vec<TableRow>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -594,4 +661,67 @@ struct ListDtsTrack {
     unit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     extras: Option<JsonMap<String, JsonValue>>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct TableColumn {
+    #[serde(rename = "type")]
+    kind: String,
+    id: String,
+    title: String,
+}
+
+impl TableColumn {
+    fn text(id: &str, title: &str) -> Self {
+        Self {
+            kind: "text".to_string(),
+            id: id.to_string(),
+            title: title.to_string(),
+        }
+    }
+
+    fn number(id: &str, title: &str) -> Self {
+        Self {
+            kind: "number".to_string(),
+            id: id.to_string(),
+            title: title.to_string(),
+        }
+    }
+
+    fn object(id: &str, title: &str) -> Self {
+        Self {
+            kind: "object".to_string(),
+            id: id.to_string(),
+            title: title.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct TableRow {
+    #[serde(rename = "type")]
+    kind: String,
+    cells: Vec<TableCell>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum TableCell {
+    Text { text: String },
+    Number { value: f64 },
+    Object { object: JsonMap<String, JsonValue> },
+}
+
+impl TableCell {
+    fn text<T: Into<String>>(value: T) -> Self {
+        Self::Text { text: value.into() }
+    }
+
+    fn number(value: f64) -> Self {
+        Self::Number { value }
+    }
+
+    fn object(value: JsonMap<String, JsonValue>) -> Self {
+        Self::Object { object: value }
+    }
 }
