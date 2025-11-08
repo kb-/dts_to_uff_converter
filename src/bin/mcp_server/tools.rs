@@ -474,7 +474,7 @@ impl ListDtsTracks {
                     track
                         .sensitivity_m_v_per_g
                         .map(TableCell::number)
-                        .unwrap_or_else(|| TableCell::text(String::from(""))),
+                        .unwrap_or_else(|| TableCell::number(f64::NAN)),
                     track
                         .serial
                         .clone()
