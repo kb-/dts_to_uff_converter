@@ -472,7 +472,7 @@ impl ListDtsTracks {
             })
             .unwrap_or_default();
 
-        let properties: Option<HashMap<String, JsonMap<String, JsonValue>>> = schema_value
+        let mut properties: Option<HashMap<String, JsonMap<String, JsonValue>>> = schema_value
             .get("properties")
             .and_then(|value| value.as_object())
             .map(|props| {
@@ -486,6 +486,45 @@ impl ListDtsTracks {
                     })
                     .collect()
             });
+
+        // Normalize non-standard schemas emitted for flexible fields.
+        // Some validators reject "type": "unknown". Treat extras as a free-form object.
+        if let Some(props) = properties.as_mut() {
+            if let Some(tracks_schema) = props.get_mut("tracks") {
+                if let Some(items_obj) = tracks_schema
+                    .get_mut("items")
+                    .and_then(|v| v.as_object_mut())
+                {
+                    if let Some(item_props) = items_obj
+                        .get_mut("properties")
+                        .and_then(|v| v.as_object_mut())
+                    {
+                        if let Some(extras_obj) = item_props
+                            .get_mut("extras")
+                            .and_then(|v| v.as_object_mut())
+                        {
+                            // If the generator emitted an unsupported type for extras, replace it.
+                            if let Some(type_val) = extras_obj.get_mut("type") {
+                                if type_val.as_str() == Some("unknown") {
+                                    *type_val = JsonValue::String("object".to_string());
+                                }
+                            } else {
+                                // Ensure we at least declare it as an object.
+                                extras_obj.insert(
+                                    "type".to_string(),
+                                    JsonValue::String("object".to_string()),
+                                );
+                            }
+
+                            // Allow arbitrary key/value pairs in extras.
+                            extras_obj
+                                .entry("additionalProperties".to_string())
+                                .or_insert(JsonValue::Bool(true));
+                        }
+                    }
+                }
+            }
+        }
 
         Some(ToolOutputSchema::new(required, properties))
     }
