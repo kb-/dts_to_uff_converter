@@ -578,9 +578,7 @@ impl ListDtsTracks {
                     .get_mut("items")
                     .and_then(|value| value.as_object_mut())
                 {
-                    items_obj
-                        .entry("type".to_string())
-                        .or_insert(JsonValue::String("object".to_string()));
+                    items_obj.insert("type".to_string(), JsonValue::String("object".to_string()));
                 }
             }
 
@@ -589,36 +587,14 @@ impl ListDtsTracks {
                     .get_mut("items")
                     .and_then(|value| value.as_object_mut())
                 {
+                    items_obj.insert("type".to_string(), JsonValue::String("object".to_string()));
+
                     if let Some(row_props) = items_obj
                         .get_mut("properties")
                         .and_then(|value| value.as_object_mut())
                     {
                         if let Some(cells_schema) = row_props.get_mut("cells") {
-                            if let Some(cells_items) = cells_schema
-                                .get_mut("items")
-                                .and_then(|value| value.as_object_mut())
-                            {
-                                cells_items
-                                    .entry("type".to_string())
-                                    .or_insert(JsonValue::String("object".to_string()));
-
-                                if let Some(cell_props) = cells_items
-                                    .get_mut("properties")
-                                    .and_then(|value| value.as_object_mut())
-                                {
-                                    if let Some(object_schema) = cell_props
-                                        .get_mut("object")
-                                        .and_then(|value| value.as_object_mut())
-                                    {
-                                        object_schema
-                                            .entry("type".to_string())
-                                            .or_insert(JsonValue::String("object".to_string()));
-                                        object_schema
-                                            .entry("additionalProperties".to_string())
-                                            .or_insert(JsonValue::Bool(true));
-                                    }
-                                }
-                            }
+                            normalize_cells_schema(cells_schema);
                         }
                     }
                 }
@@ -626,6 +602,46 @@ impl ListDtsTracks {
         }
 
         Some(ToolOutputSchema::new(required, properties))
+    }
+}
+
+fn normalize_cells_schema(cells_schema: &mut JsonValue) {
+    if let Some(cells_obj) = cells_schema.as_object_mut() {
+        if let Some(items_value) = cells_obj.get_mut("items") {
+            if let Some(items_obj) = items_value.as_object_mut() {
+                items_obj.insert("type".to_string(), JsonValue::String("object".to_string()));
+
+                if let Some(one_of) = items_obj
+                    .get_mut("oneOf")
+                    .and_then(|value| value.as_array_mut())
+                {
+                    for variant in one_of {
+                        if let Some(variant_obj) = variant.as_object_mut() {
+                            normalize_cell_object_properties(variant_obj);
+                        }
+                    }
+                } else {
+                    normalize_cell_object_properties(items_obj);
+                }
+            }
+        }
+    }
+}
+
+fn normalize_cell_object_properties(schema: &mut JsonMap<String, JsonValue>) {
+    if let Some(properties) = schema
+        .get_mut("properties")
+        .and_then(|value| value.as_object_mut())
+    {
+        if let Some(object_schema) = properties
+            .get_mut("object")
+            .and_then(|value| value.as_object_mut())
+        {
+            object_schema.insert("type".to_string(), JsonValue::String("object".to_string()));
+            object_schema
+                .entry("additionalProperties".to_string())
+                .or_insert(JsonValue::Bool(true));
+        }
     }
 }
 

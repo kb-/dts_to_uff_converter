@@ -99,6 +99,12 @@ npx @modelcontextprotocol/inspector --config ./inspector.mcp.json --server dts-t
 
 Leave the process running, open the URL it prints (e.g., `http://localhost:6274/`), and press **Connect** in the UI to inspect the `convert_dts_to_uff` tool. Set `DANGEROUSLY_OMIT_AUTH=true` before running the command if you want to skip the auth token locally.
 
+## Building
+
+- Run `cargo build --workspace` to compile both the CLI (`dts_to_uff_converter`) and MCP server (`mcp_server`) in debug mode.
+- Use `cargo build --workspace --release` to produce optimized binaries in `target/release`.
+- To build just one executable, add `--bin dts_to_uff_converter` or `--bin mcp_server` to the command.
+
 ## Development
 
 - Format code with `cargo fmt --all`.
